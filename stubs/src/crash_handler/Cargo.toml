@@ -1,4 +1,4 @@
-# Not Bun's manifest: the stand-in for bun_crash_handler that live-compile/transpiler/scripts/vendor-bun.py writes in
+# Not Bun's manifest: the stand-in for bun_crash_handler that live-compile/scripts/vendor-bun.py writes in
 # its place (see stubs/src/crash_handler/lib.rs).
 [package]
 name = "bun_crash_handler"
