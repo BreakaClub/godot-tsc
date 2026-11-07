@@ -2,6 +2,8 @@
 //! nothing else: Bun's shims for binaries that link the parser (`vendor/bun/standalone-native.rs`, adapted for wasm),
 //! and the one that `bun_sys` provides on every other target.
 
+// Bun's file, written by scripts/vendor-bun.py: it is not formatted here (`cargo fmt -p` formats the modules a crate pulls in by path).
+#[rustfmt::skip]
 #[path = "../vendor/bun/standalone-native.rs"]
 mod standalone;
 
