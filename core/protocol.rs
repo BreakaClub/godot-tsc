@@ -20,6 +20,8 @@ pub enum Request {
     RemoveFile { path: String },
     /// Checks the project whose configuration file is at `config`, with the lib files in `lib_dir`.
     Check { config: String, lib_dir: String },
+    /// What is under `offset` (UTF-16) in the file at `path`: the name and the type (`services::hover`).
+    Hover { config: String, lib_dir: String, path: String, offset: usize },
 }
 
 /// A file of the checker's project: an absolute path and the text.

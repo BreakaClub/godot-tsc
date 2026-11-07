@@ -72,6 +72,9 @@ impl Service {
                 self.host.remove(path.as_bytes());
                 to_json(&Response::Done(Done { ok: true }))
             }
+            Request::Hover { config, lib_dir, path, offset } => {
+                crate::services::hover(&self.host, &mut self.runs, config.as_bytes(), lib_dir.as_bytes(), path.as_bytes(), offset)
+            }
             Request::Check { config, lib_dir } => {
                 let report = check::check(&self.host, &mut self.runs, config.as_bytes(), lib_dir.as_bytes());
                 format!("{{\"ok\":true,\"report\":{report}}}")

@@ -134,24 +134,24 @@ impl Host for MemoryHost {
 }
 
 /// Positions in one file's text: UTF-8 byte offsets to UTF-16 offsets, and line starts for line and character.
-struct Positions<'t> {
+pub(crate) struct Positions<'t> {
     text: &'t [u8],
     starts: Vec<u32>,
 }
 
 impl<'t> Positions<'t> {
-    fn new(text: &'t [u8]) -> Positions<'t> {
+    pub(crate) fn new(text: &'t [u8]) -> Positions<'t> {
         Positions { text, starts: compute_ecma_line_starts(text) }
     }
 
     /// The UTF-16 code units of `text[from..to]`: a four-byte sequence is two units, any other is one.
-    fn units(&self, from: usize, to: usize) -> usize {
+    pub(crate) fn units(&self, from: usize, to: usize) -> usize {
         let bytes = &self.text[from..to];
         bytes.iter().filter(|&&b| b & 0xC0 != 0x80).count() + bytes.iter().filter(|&&b| b >= 0xF0).count()
     }
 
     /// `(offset, line, character)` in UTF-16 code units of the byte offset `at`; the line counts from 0.
-    fn of(&self, at: u32) -> (usize, usize, usize) {
+    pub(crate) fn of(&self, at: u32) -> (usize, usize, usize) {
         let at = (at as usize).min(self.text.len());
         let line = self.starts.partition_point(|&s| s as usize <= at).saturating_sub(1);
         let start = self.starts[line] as usize;
@@ -160,7 +160,7 @@ impl<'t> Positions<'t> {
 }
 
 /// A JSON string literal of `text`, which is UTF-8: the files are, and so is what the checker writes of them.
-fn string(out: &mut String, text: &[u8]) {
+pub(crate) fn string(out: &mut String, text: &[u8]) {
     let text = std::str::from_utf8(text).unwrap_or_else(|e| panic!("a message or path is not UTF-8: {e}"));
     out.push('"');
 
@@ -336,7 +336,7 @@ fn texts(errors: impl Iterator<Item = (u32, Vec<Vec<u8>>)>) -> Vec<String> {
 ///
 /// The host writes the configuration and gives every file the program reaches, so an error in the configuration or in
 /// the program (a missing lib) is a defect of the host, and panics.
-fn load<'s>(session: &'s Session, host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8]) -> (&'s Program<'s>, bool, Rc<Shared>) {
+pub(crate) fn load<'s>(session: &'s Session, host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8]) -> (&'s Program<'s>, bool, Rc<Shared>) {
     let mut project = match bun_sema::config::load_overriding(host, session, config, &|_| Vec::new()) {
         Ok(project) => project,
         Err(errors) => panic!("the configuration is unreadable: {:?}", texts(errors.into_iter().map(|e| (e.code, e.args)))),
@@ -528,4 +528,33 @@ pub fn check(host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8]) 
     }
     out.push_str(&format!("],\"deepestStack\":{deepest_stack}}}"));
     out
+}
+
+/// Runs `then` with the editor services (`bun_sema::check::services`) of the file at `path`, once the project whose configuration is
+/// `config` has been loaded and that file checked, with the file's text. `None` if the program has no such file.
+///
+/// The program is loaded as a check loads it (the files that are no configuration's roots are shared with the checks, parsed once) and
+/// is dropped when `then` returns.
+pub(crate) fn with_services_of<R>(
+    host: &MemoryHost,
+    runs: &mut Runs,
+    config: &[u8],
+    lib_dir: &[u8],
+    path: &[u8],
+    then: impl FnOnce(&mut bun_sema::check::services::Services<'_, '_, '_>, FileId, &[u8]) -> R,
+) -> Option<R> {
+    // Declared before the session, so that it is dropped after it.
+    let _shared;
+    let session = Session::new();
+    let (program, _, shared) = load(&session, host, runs, config, lib_dir);
+    _shared = shared;
+    let index = program.files.modules.iter().position(|module| module.file_name() == path)?;
+    let file = FileId(index as u32);
+    let mut checker = program.checker();
+    checker.set_requested(Requested::All);
+    checker.begin_stack_budget();
+    // The services answer about a file that has just been checked.
+    checker.check_file(file);
+    let text = &program.files.modules[file.idx()].hir.text[..];
+    Some(checker.with_services(file, None, |services| then(services, file, text)))
 }

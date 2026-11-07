@@ -12,6 +12,10 @@ name = "live_compile"
 path = "lib.rs"
 crate-type = ["cdylib"]
 
+[features]
+# The Web side module (scripts/build-live-compile-web.mjs): gdext's experimental support for wasm32-unknown-emscripten.
+web = ["godot/experimental-wasm"]
+
 [dependencies]
 # The same binding as the UI extension (../../Cargo.toml): lean Web templates omit optional classes, so each method is
 # resolved on first use. No experimental-threads: the Godot API is only used on the main thread, and the service thread
