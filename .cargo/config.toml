@@ -1,0 +1,7 @@
+[target.wasm32-unknown-unknown]
+# The stack the module runs a transpile on, in linear memory (crate/wasm.rs). The vendored crates are built as they come,
+# with their lints reported, not enforced.
+rustflags = ["-C", "link-arg=-zstack-size=8388608", "--cap-lints=warn"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["--cap-lints=warn"]

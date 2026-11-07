@@ -1,0 +1,40 @@
+# The library behind live-compile (`vendor/bun`, which `scripts/vendor-bun.py` writes): Bun's TypeScript checker and its
+# JavaScript compiler over one project in memory, behind one request-in, response-out function (`Service::handle`). The
+# GDExtension (`../ext`) links it; `main.rs` is a native process that speaks frames on stdin and stdout (tests and tools);
+# `wasm.rs` exports it from a WebAssembly module with no imports. The workspace is `../Cargo.toml`; the vendored crates are
+# path dependencies in theirs.
+[package]
+name = "live_compile_core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "live-compile-cli"
+path = "main.rs"
+
+[dependencies]
+bun_sema = { path = "../vendor/bun/src/sema" }
+bun_sema_parser = { path = "../vendor/bun/src/sema/parser" }
+bun_js_parser = { path = "../vendor/bun/src/js_parser" }
+bun_js_printer = { path = "../vendor/bun/src/js_printer" }
+bun_ast = { path = "../vendor/bun/src/ast" }
+bun_core = { path = "../vendor/bun/src/bun_core" }
+bun_alloc = { path = "../vendor/bun/src/bun_alloc" }
+bun_crash_handler = { path = "../vendor/bun/src/crash_handler" }
+bun_options_types = { path = "../vendor/bun/src/options_types" }
+bun_collections = { path = "../vendor/bun/src/collections" }
+bun_threading = { path = "../vendor/bun/src/threading" }
+bstr = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+libc = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bun_sema_mimalloc)"] }

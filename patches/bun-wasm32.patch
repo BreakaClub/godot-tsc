@@ -1,0 +1,815 @@
+diff --git a/src/ast/Cargo.toml b/src/ast/Cargo.toml
+index f3badc7..814b870 100644
+--- a/src/ast/Cargo.toml
++++ b/src/ast/Cargo.toml
+@@ -24,6 +24,8 @@ bun_core.workspace = true
+ bun_ptr.workspace = true
+ bun_paths.workspace = true
+ bun_collections.workspace = true
+-bun_sys.workspace = true
+ bun_perf.workspace = true
+ bun_wyhash.workspace = true
++
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
++bun_sys.workspace = true
+diff --git a/src/ast/b.rs b/src/ast/b.rs
+index 7ce9c8f..602c8d3 100644
+--- a/src/ast/b.rs
++++ b/src/ast/b.rs
+@@ -51,8 +51,10 @@ impl Default for B {
+ // Three `StoreRef<T>` variants (8 B align 4) + one ZST → 1-byte discriminant
+ // + 8-byte payload = 9, align(4) rounds to 12. `Binding` = `B` (12, align 4)
+ // + `Loc` (i32) → 16. `Option<B>` niche-packs via spare discriminant values.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<B>() == 12);
+ const _: () = assert!(core::mem::align_of::<B>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<super::binding::Binding>() == 16);
+ const _: () = assert!(
+     core::mem::size_of::<Option<B>>() == core::mem::size_of::<B>(),
+diff --git a/src/ast/e.rs b/src/ast/e.rs
+index 589cfd9..24a308a 100644
+--- a/src/ast/e.rs
++++ b/src/ast/e.rs
+@@ -353,6 +353,7 @@ pub struct Arrow {
+     pub has_react_hooks_suppression: bool,
+ }
+ // The fourth bool fits in existing trailing padding.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Arrow>() == 32);
+ impl Arrow {
+     pub const NOOP_RETURN_UNDEFINED: Arrow = Arrow {
+@@ -682,6 +683,7 @@ pub struct Number {
+     value: f64,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Number>() == 8);
+ const _: () = assert!(core::mem::align_of::<Number>() == 4);
+ 
+@@ -856,6 +858,7 @@ pub enum JsonValue {
+     Array(StoreRef<ArrayJSON>) = 5,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<JsonValue>() == 16);
+ const _: () = assert!(core::mem::align_of::<JsonValue>() == 4);
+ 
+@@ -926,10 +929,14 @@ pub struct PropertyJSON {
+     pub value: JsonValue,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<PropertyJSON>() == 32);
+ // Read from C++ (JSONRowsToJS.cpp), which asserts the same offsets.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(PropertyJSON, key) == 0);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(PropertyJSON, key_loc) == 12);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(PropertyJSON, value) == 16);
+ 
+ /// Where a [`JsonTape`]'s buffers (and, in arena mode, the tape itself) live.
+@@ -1129,9 +1136,13 @@ pub struct ObjectJSON {
+     pub is_single_line: bool,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(ObjectJSON, first) == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(ObjectJSON, count) == 12);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(ArrayJSON, first) == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::offset_of!(ArrayJSON, count) == 12);
+ 
+ // SAFETY: the tape outlives the AST (`StoreRef`'s contract) and is read-only once parsing returns.
+diff --git a/src/ast/expr.rs b/src/ast/expr.rs
+index f2849ff..83eb53e 100644
+--- a/src/ast/expr.rs
++++ b/src/ast/expr.rs
+@@ -1503,8 +1503,10 @@ pub enum Data {
+ // payload → 12 at align 4. `Expr` = `Data` (12, align 4) + `Loc` (i32) → 16.
+ // `Option<Data>`/`Option<Expr>` niche-pack via spare discriminant values
+ // (47 variants < 256); a `#[repr(C)]`/`#[repr(u32)]` on `Data` would break it.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Data>() == 12); // Do not increase the size of Expr
+ const _: () = assert!(core::mem::align_of::<Data>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Expr>() == 16);
+ const _: () = assert!(
+     core::mem::size_of::<Option<Data>>() == core::mem::size_of::<Data>(),
+@@ -1516,20 +1518,27 @@ const _: () = assert!(
+ );
+ // Inline-payload ceilings (regress any of these and `Data` grows past 12).
+ // `align_of <= 4` is what keeps `Data` (and therefore `Expr`) at align 4.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::Identifier>() == 8);
+ const _: () = assert!(core::mem::align_of::<E::Identifier>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::ImportIdentifier>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::CommonJSExportIdentifier>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<E::PrivateIdentifier>() == 8);
+ const _: () = assert!(core::mem::size_of::<E::Number>() <= 8);
+ const _: () = assert!(core::mem::align_of::<E::Number>() == 4);
+ const _: () = assert!(core::mem::size_of::<E::Special>() <= 8);
+ const _: () = assert!(core::mem::size_of::<E::RequireString>() <= 8);
+ const _: () = assert!(core::mem::size_of::<E::NewTarget>() <= 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreRef<E::Binary>>() == core::mem::size_of::<usize>());
+ // Heap-payload shrinks unlocked by the 12-byte StoreSlice<T>:
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<crate::G::FnBody>() == 16);
+ const _: () = assert!(core::mem::size_of::<E::Arrow>() <= 32);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<crate::S::Block>() == 16);
+ 
+ // Field-style accessors (`data.e_string()`, `data.e_object()`). The match arms
+diff --git a/src/ast/lib.rs b/src/ast/lib.rs
+index dcb73be..893c0eb 100644
+--- a/src/ast/lib.rs
++++ b/src/ast/lib.rs
+@@ -195,6 +195,7 @@ pub enum RefTag {
+ #[derive(Clone, Copy)]
+ pub struct Ref(u64);
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Ref>() == 8);
+ const _: () = assert!(core::mem::align_of::<Ref>() == 4);
+ 
+@@ -1875,6 +1876,7 @@ impl Log {
+         )
+     }
+ 
++    #[cfg(not(target_family = "wasm"))] // file I/O
+     /// Use a bun.sys.Error's message in addition to some extra context.
+     pub fn add_sys_error(&mut self, e: &bun_sys::Error, args: fmt::Arguments<'_>) {
+         let Some((tag_name, sys_errno)) = e.get_error_code_tag_name() else {
+@@ -2883,6 +2885,7 @@ pub struct ToSourceOptions {
+ 
+ /// Read `path` (rooted at cwd) into memory and wrap it in a `Source`.
+ ///
++#[cfg(not(target_family = "wasm"))] // file I/O
+ /// MOVE_DOWN from `bun_sys::File::to_source` (T1 cannot name T2).
+ pub fn source_from_file(path: &bun_core::ZStr, opts: ToSourceOptions) -> bun_sys::Maybe<Source> {
+     source_from_file_at(bun_sys::Fd::cwd(), path, opts)
+@@ -2890,6 +2893,7 @@ pub fn source_from_file(path: &bun_core::ZStr, opts: ToSourceOptions) -> bun_sys
+ 
+ /// Read `path` (relative to `dir_fd`) into memory and wrap it in a `Source`.
+ ///
++#[cfg(not(target_family = "wasm"))] // file I/O
+ /// MOVE_DOWN from `bun_sys::File::to_source_at` (T1 cannot name T2).
+ fn source_from_file_at(
+     dir_fd: bun_sys::Fd,
+@@ -2909,6 +2913,7 @@ fn source_from_file_at(
+ }
+ 
+ /// `source_from_file_at` rooted at the process CWD.
++#[cfg(not(target_family = "wasm"))] // file I/O
+ pub fn to_source(path: &bun_core::ZStr, opts: ToSourceOptions) -> bun_sys::Result<Source> {
+     source_from_file(path, opts)
+ }
+diff --git a/src/ast/nodes.rs b/src/ast/nodes.rs
+index 8fa7890..7742e3c 100644
+--- a/src/ast/nodes.rs
++++ b/src/ast/nodes.rs
+@@ -28,8 +28,10 @@ pub use crate::flags as Flags;
+ #[repr(C, packed(4))]
+ pub struct StoreRef<T>(NonNull<T>);
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreRef<u8>>() == 8);
+ const _: () = assert!(core::mem::align_of::<StoreRef<u8>>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Option<StoreRef<u8>>>() == 8);
+ 
+ // SAFETY: `StoreRef` is a thin pointer into a single-threaded bump arena.
+@@ -161,6 +163,7 @@ pub struct StoreStr {
+     len: u32,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreStr>() == 12);
+ const _: () = assert!(core::mem::align_of::<StoreStr>() == 4);
+ 
+@@ -327,6 +330,7 @@ pub struct StoreSlice<T> {
+     len: u32,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreSlice<u8>>() == 12);
+ const _: () = assert!(core::mem::align_of::<StoreSlice<u8>>() == 4);
+ 
+@@ -558,6 +562,7 @@ pub struct LocRef {
+     pub ref_: Ref,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<LocRef>() == 12);
+ 
+ impl Default for LocRef {
+diff --git a/src/ast/stmt.rs b/src/ast/stmt.rs
+index 7ee2e2e..50c8a0a 100644
+--- a/src/ast/stmt.rs
++++ b/src/ast/stmt.rs
+@@ -328,20 +328,25 @@ pub enum Data {
+ // `Data` (12, align 4) + `Loc` (i32) → 16. `Option<Data>`/`Option<Stmt>`
+ // niche-pack via spare discriminant values (33 variants < 256); a
+ // `#[repr(C)]`/`#[repr(u32)]` on `Data` would break it.
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Data>() == 12);
+ const _: () = assert!(core::mem::align_of::<Data>() == 4);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Stmt>() == 16,
+     "Expected Stmt to be 16 bytes"
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Option<Data>>() == core::mem::size_of::<Data>(),
+     "stmt::Data lost its niche — check for #[repr] or nullable-ptr payload"
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(
+     core::mem::size_of::<Option<Stmt>>() == core::mem::size_of::<Stmt>(),
+     "Stmt lost its niche"
+ );
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<StoreRef<S::SExpr>>() == core::mem::size_of::<usize>());
+ 
+ // Field-style union accessors (`data.s_function()`, `data.s_local()`, …).
+diff --git a/src/ast/symbol.rs b/src/ast/symbol.rs
+index 0baff6d..e41a6d8 100644
+--- a/src/ast/symbol.rs
++++ b/src/ast/symbol.rs
+@@ -161,6 +161,7 @@ symbol_flag_accessors! {
+     call_ignores_this, set_call_ignores_this => CALL_IGNORES_THIS;
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(core::mem::size_of::<Option<bun_alloc::AstBox<G::NamespaceAlias>>>() == 8);
+ const _: () = assert!(core::mem::size_of::<Symbol>() <= 48);
+ 
+diff --git a/src/bun_alloc/arena_box.rs b/src/bun_alloc/arena_box.rs
+index 1a548fa..966791f 100644
+--- a/src/bun_alloc/arena_box.rs
++++ b/src/bun_alloc/arena_box.rs
+@@ -53,8 +53,11 @@ unsafe impl Allocator for FreesOnly<'_> {
+ /// See the module doc.
+ pub struct ArenaBox<'a, T: ?Sized>(Box<T, FreesOnly<'a>>);
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(size_of::<ArenaBox<'static, u64>>() == 8);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(size_of::<ArenaBox<'static, [u64]>>() == 16);
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(size_of::<Option<ArenaBox<'static, [u64]>>>() == 16);
+ 
+ impl<'a, T: ?Sized> ArenaBox<'a, T> {
+diff --git a/src/bun_alloc/baby_vec.rs b/src/bun_alloc/baby_vec.rs
+index d13cbac..2877775 100644
+--- a/src/bun_alloc/baby_vec.rs
++++ b/src/bun_alloc/baby_vec.rs
+@@ -24,6 +24,7 @@ pub struct BabyVec<'a, T> {
+     alloc: &'a MimallocArena,
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(size_of::<BabyVec<'static, u8>>() == 24);
+ 
+ // SAFETY: same as `Vec<T, &MimallocArena>` — `Send`/`Sync` follow `T` and the
+diff --git a/src/bun_alloc/basic.rs b/src/bun_alloc/basic.rs
+index 4ec2f3a..5aa1827 100644
+--- a/src/bun_alloc/basic.rs
++++ b/src/bun_alloc/basic.rs
+@@ -43,7 +43,8 @@ static C_ALLOCATOR_VTABLE: &AllocatorVTable = &AllocatorVTable {
+ mod memory_allocator_tags {
+     use core::ffi::c_void;
+ 
+-    const DEFAULT_ALLOCATOR_TAG: usize = 0xBEEFA110C; // "BEEFA110C"  beef a110c i guess
++    // Written as a u64: on wasm32 a usize cannot hold it, and the tag is its low 32 bits.
++    const DEFAULT_ALLOCATOR_TAG: usize = 0xBEEFA110C_u64 as usize; // "BEEFA110C"  beef a110c i guess
+     pub(crate) const DEFAULT_ALLOCATOR_TAG_PTR: *mut c_void = DEFAULT_ALLOCATOR_TAG as *mut c_void;
+ }
+ 
+diff --git a/src/bun_alloc/lib.rs b/src/bun_alloc/lib.rs
+index ac62c74..7bf1af0 100644
+--- a/src/bun_alloc/lib.rs
++++ b/src/bun_alloc/lib.rs
+@@ -54,7 +54,9 @@ pub(crate) const MAX_ALIGN_T: usize = core::mem::align_of::<MaxAlignT>();
+ // for the aarch64 port.
+ #[cfg(all(target_os = "freebsd", target_arch = "aarch64"))]
+ pub(crate) const MAX_ALIGN_T: usize = 16;
+-#[cfg(not(any(windows, all(target_os = "freebsd", target_arch = "aarch64"))))]
++#[cfg(all(target_family = "wasm", target_os = "unknown"))]
++pub(crate) const MAX_ALIGN_T: usize = 16;
++#[cfg(not(any(windows, all(target_os = "freebsd", target_arch = "aarch64"), all(target_family = "wasm", target_os = "unknown"))))]
+ pub(crate) const MAX_ALIGN_T: usize = core::mem::align_of::<libc::max_align_t>();
+ 
+ pub struct AllocatorVTable {
+@@ -186,6 +188,17 @@ pub const USE_MIMALLOC: bool = cfg!(not(bun_asan));
+ //   `bun_runtime::allocators`; callers import from
+ //   there directly.
+ //
++/// The C heap: libc's, or on wasm32-unknown-unknown, which has no C library, mimalloc's (the host provides it).
++#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
++pub(crate) use ::libc as c_heap;
++#[cfg(all(target_family = "wasm", target_os = "unknown"))]
++pub(crate) mod c_heap {
++    use core::ffi::{c_char, c_void};
++    pub unsafe fn malloc(size: usize) -> *mut c_void { crate::mimalloc::mi_malloc(size) }
++    pub unsafe fn realloc(p: *mut c_void, size: usize) -> *mut c_void { unsafe { crate::mimalloc::mi_realloc(p, size) } }
++    pub unsafe fn free(p: *mut c_void) { unsafe { crate::mimalloc::mi_free(p) } }
++    pub unsafe fn strlen(p: *const c_char) -> usize { unsafe { core::ffi::CStr::from_ptr(p).count_bytes() } }
++}
+ #[path = "MaxHeapAllocator.rs"]
+ pub mod max_heap_allocator;
+ pub mod stack_fallback;
+@@ -198,7 +211,7 @@ pub mod default_alloc {
+     pub fn malloc(size: usize) -> *mut c_void {
+         if cfg!(bun_asan) {
+             // SAFETY: `libc::malloc` has no input preconditions; null on failure.
+-            unsafe { libc::malloc(size) }
++            unsafe { crate::c_heap::malloc(size) }
+         } else {
+             crate::mimalloc::mi_malloc(size)
+         }
+@@ -211,7 +224,7 @@ pub mod default_alloc {
+         if cfg!(bun_asan) {
+             // SAFETY: caller guarantees `ptr` is null or a live libc allocation
+             // (the default allocator under ASAN).
+-            unsafe { libc::realloc(ptr, new_size) }
++            unsafe { crate::c_heap::realloc(ptr, new_size) }
+         } else {
+             // SAFETY: caller guarantees `ptr` is null or a live mimalloc allocation.
+             unsafe { crate::mimalloc::mi_realloc(ptr, new_size) }
+@@ -225,7 +238,7 @@ pub mod default_alloc {
+         if cfg!(bun_asan) {
+             // SAFETY: caller guarantees `ptr` is null or a live libc allocation
+             // (the default allocator under ASAN).
+-            unsafe { libc::free(ptr) }
++            unsafe { crate::c_heap::free(ptr) }
+         } else {
+             // SAFETY: caller guarantees `ptr` is null or a live mimalloc allocation.
+             unsafe { crate::mimalloc::mi_free(ptr) }
+@@ -631,6 +644,8 @@ static PAGE_SIZE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+ #[inline]
+ pub fn page_size() -> usize {
+     *PAGE_SIZE.get_or_init(|| {
++        #[cfg(all(target_family = "wasm", not(unix)))] // emscripten is unix
++        { 65536 }
+         #[cfg(unix)]
+         {
+             // By-value `c_int` in / `c_long` out; POSIX `sysconf` has no
+@@ -948,7 +963,7 @@ pub unsafe fn free_sensitive_cstr(p: *const core::ffi::c_char) {
+     // zero pass — the free is still exact (`mi_free`/`libc::free` are
+     // size-agnostic).
+     unsafe {
+-        let len = libc::strlen(p);
++        let len = crate::c_heap::strlen(p);
+         secure_zero(p.cast::<u8>().cast_mut(), len);
+         crate::default_alloc::free(p.cast::<core::ffi::c_void>().cast_mut());
+     }
+diff --git a/src/bun_core/Global.rs b/src/bun_core/Global.rs
+index cd21cf9..4e49b20 100644
+--- a/src/bun_core/Global.rs
++++ b/src/bun_core/Global.rs
+@@ -716,7 +716,12 @@ pub fn exit(code: u32) -> ! {
+         // `ExitProcess` is `safe fn` (no preconditions; never returns).
+         crate::windows_sys::kernel32::ExitProcess(code)
+     }
+-    #[cfg(not(any(target_os = "macos", windows)))]
++    #[cfg(all(target_family = "wasm", not(unix)))]
++    {
++        let _ = code;
++        unreachable!("no process exit on wasm")
++    }
++    #[cfg(not(any(target_os = "macos", windows, all(target_family = "wasm", not(unix)))))]
+     {
+         if env::ENABLE_ASAN {
+             libc_exit(code as i32);
+@@ -773,7 +778,7 @@ pub fn raise_ignoring_panic_handler_raw(sig: c_int) -> ! {
+     }
+ 
+     // clear signal handler
+-    #[cfg(not(windows))]
++    #[cfg(not(any(windows, all(target_family = "wasm", not(unix)))))]
+     {
+         // SAFETY: zeroed sigset + SIG_DFL handler is a valid Sigaction.
+         unsafe {
+diff --git a/src/bun_core/debug.rs b/src/bun_core/debug.rs
+index 336b091..4f5a02b 100644
+--- a/src/bun_core/debug.rs
++++ b/src/bun_core/debug.rs
+@@ -202,7 +202,12 @@ fn is_valid_memory(address: usize) -> bool {
+             && mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD) == 0
+             && mbi.Protect & READABLE != 0
+     }
+-    #[cfg(not(windows))]
++    #[cfg(all(target_family = "wasm", not(unix)))]
++    {
++        let _ = (aligned_address, page_size);
++        true
++    }
++    #[cfg(not(any(windows, all(target_family = "wasm", not(unix)))))]
+     {
+         // SAFETY: msync only inspects the mapping; aligned_address is page-aligned.
+         let rc = unsafe {
+diff --git a/src/bun_core/lib.rs b/src/bun_core/lib.rs
+index 9856974..39036ec 100644
+--- a/src/bun_core/lib.rs
++++ b/src/bun_core/lib.rs
+@@ -1336,12 +1336,12 @@ pub(crate) mod strings_impl {
+         debug_assert!(!a.is_empty());
+ 
+         // Miri has no shim for either libc call, and `bun_url`'s unit tests reach this.
+-        #[cfg(miri)]
++        #[cfg(any(miri, all(target_family = "wasm", target_os = "unknown")))]
+         {
+             a.eq_ignore_ascii_case(&b[..a.len()])
+         }
+         // SAFETY: a.len() <= b.len() here; strncasecmp reads at most a.len() bytes from each.
+-        #[cfg(all(not(miri), not(windows)))]
++        #[cfg(all(not(miri), not(windows), not(all(target_family = "wasm", target_os = "unknown"))))]
+         unsafe {
+             libc::strncasecmp(a.as_ptr().cast(), b.as_ptr().cast(), a.len()) == 0
+         }
+diff --git a/src/bun_core/output.rs b/src/bun_core/output.rs
+index ce9b6d7..608fedc 100644
+--- a/src/bun_core/output.rs
++++ b/src/bun_core/output.rs
+@@ -246,10 +246,9 @@ fn stdio_tty_flag(idx: usize) -> bool {
+ // ──────────────────────────────────────────────────────────────────────────
+ 
+ /// `Source.StreamType` — `File` on native, a fixed-buffer stream on WASM.
+-#[cfg(not(target_arch = "wasm32"))]
++// On wasm too: the wasm32 arm named `FixedBufferStream`, which is not ported. Nothing is written on wasm (the host's
++// output sink discards it).
+ pub type StreamType = File;
+-#[cfg(target_arch = "wasm32")]
+-pub type StreamType = io::FixedBufferStream; // wasm32 is not built yet; FixedBufferStream is unported.
+ 
+ pub struct Source {
+     pub(crate) stdout_buffer: [u8; 4096],
+@@ -273,14 +272,7 @@ impl Source {
+     // `File::ZEROED` is `Fd::INVALID`, so a pre-init read fails loudly
+     // instead of aliasing fd 0; `FixedBufferStream` has no `ZEROED` const,
+     // so the wasm32 arm spells out the empty stream field-wise.
+-    #[cfg(not(target_arch = "wasm32"))]
+     const ZEROED_STREAM: StreamType = StreamType::ZEROED;
+-    #[cfg(target_arch = "wasm32")]
+-    const ZEROED_STREAM: StreamType = StreamType {
+-        buf: core::ptr::null_mut(),
+-        len: 0,
+-        pos: 0,
+-    };
+ 
+     pub(crate) const ZEROED: Self = Self {
+         stdout_buffer: [0u8; 4096],
+diff --git a/src/bun_core/string/SmolStr.rs b/src/bun_core/string/SmolStr.rs
+index 3fb3152..83671cf 100644
+--- a/src/bun_core/string/SmolStr.rs
++++ b/src/bun_core/string/SmolStr.rs
+@@ -5,6 +5,7 @@ use bun_alloc::AllocError;
+ // NOTE: the tag-bit scheme below only works on little-endian systems.
+ const _: () = assert!(cfg!(target_endian = "little"));
+ // NOTE: the packed layout assumes 64-bit pointers (`__ptr` occupies the upper 64 bits of the u128).
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(mem::size_of::<usize>() == 8);
+ 
+ /// This is a string type that stores up to 15 bytes inline on the stack, and heap allocates if it is longer.
+diff --git a/src/bun_core/string/mod.rs b/src/bun_core/string/mod.rs
+index 8934146..ad3b72d 100644
+--- a/src/bun_core/string/mod.rs
++++ b/src/bun_core/string/mod.rs
+@@ -94,6 +94,7 @@ pub struct String {
+ // C++ mirror: `struct BunString { BunStringTag tag; BunStringImpl impl; }`
+ // (`headers-handwritten.h`); returned **by value** from every `BunString__*`
+ // FFI below, so size/align drift is silent ABI corruption.
++#[cfg(target_pointer_width = "64")]
+ crate::assert_ffi_layout!(String, 24, 8);
+ // FFI surface from `src/jsc/bindings/BunString.cpp`. Constructors return an
+ // owned +1 (declared `-> String`).
+@@ -1170,10 +1171,23 @@ impl core::fmt::Display for EncodedSlice<'_> {
+ 
+ // `EncodedSlice` pointer-tag scheme. Flag bits live in the pointer's high
+ // byte; untagging truncates to 53 bits.
++#[cfg(target_pointer_width = "64")]
+ const TAG_UTF8_BIT: usize = 1usize << 61;
++#[cfg(target_pointer_width = "64")]
+ const TAG_GLOBAL_BIT: usize = 1usize << 62;
++#[cfg(target_pointer_width = "64")]
+ const TAG_UTF16_BIT: usize = 1usize << 63;
++#[cfg(target_pointer_width = "64")]
+ const UNTAG_MASK: usize = (1usize << 53) - 1;
++// A 32-bit pointer has no spare high bits: no slice is tagged, and tagging one panics (`mark`).
++#[cfg(not(target_pointer_width = "64"))]
++const TAG_UTF8_BIT: usize = 0;
++#[cfg(not(target_pointer_width = "64"))]
++const TAG_GLOBAL_BIT: usize = 0;
++#[cfg(not(target_pointer_width = "64"))]
++const TAG_UTF16_BIT: usize = 0;
++#[cfg(not(target_pointer_width = "64"))]
++const UNTAG_MASK: usize = usize::MAX;
+ 
+ /// `{tagged ptr, len}` with encoding bits (Latin-1 / UTF-8 / UTF-16 / global)
+ /// in the pointer's high byte; borrows `'a`. Also the [`String`] union arm.
+@@ -1185,6 +1199,7 @@ pub struct EncodedSlice<'a> {
+     pub len: usize,
+     _marker: PhantomData<&'a [u8]>,
+ }
++#[cfg(target_pointer_width = "64")]
+ crate::assert_ffi_layout!(EncodedSlice<'static>, 16, 8);
+ 
+ impl<'a> EncodedSlice<'a> {
+@@ -1228,7 +1243,15 @@ impl<'a> EncodedSlice<'a> {
+     }
+     #[inline]
+     fn mark(&mut self, bit: usize) {
+-        self._unsafe_ptr_do_not_use = ((self._unsafe_ptr_do_not_use as usize) | bit) as *const u8;
++        #[cfg(not(target_pointer_width = "64"))]
++        {
++            let _ = bit;
++            panic!("an EncodedSlice is tagged in its pointer's high bits, which a 32-bit pointer does not have");
++        }
++        #[cfg(target_pointer_width = "64")]
++        {
++            self._unsafe_ptr_do_not_use = ((self._unsafe_ptr_do_not_use as usize) | bit) as *const u8;
++        }
+     }
+     /// Strip the flag bits — truncate to the low 53 bits.
+     #[inline]
+diff --git a/src/bun_core/util.rs b/src/bun_core/util.rs
+index b7fced6..ebad01c 100644
+--- a/src/bun_core/util.rs
++++ b/src/bun_core/util.rs
+@@ -207,7 +207,7 @@ impl ZStr {
+             return Self::EMPTY;
+         }
+         // SAFETY: caller contract — `p` is non-null, NUL-terminated, valid for `'a`.
+-        let len = unsafe { libc::strlen(p) };
++        let len = unsafe { core::ffi::CStr::from_ptr(p).count_bytes() }; // no libc on wasm32-unknown-unknown
+         // SAFETY: `p[len] == 0` (strlen postcondition) and `p[..len]` readable.
+         unsafe { Self::from_raw(p.cast::<u8>(), len) }
+     }
+@@ -975,11 +975,16 @@ impl Fd {
+     pub const fn stderr() -> Fd {
+         Fd(2)
+     }
+-    #[cfg(not(windows))]
++    #[cfg(not(any(windows, all(target_family = "wasm", target_os = "unknown"))))]
+     #[inline]
+     pub fn cwd() -> Fd {
+         Fd(libc::AT_FDCWD)
+     }
++    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
++    #[inline]
++    pub fn cwd() -> Fd {
++        Fd(-2) // no file system
++    }
+ 
+     #[cfg(windows)]
+     #[inline]
+@@ -2558,7 +2563,7 @@ impl Pollable {
+ crate::declare_scope!(SYS, visible);
+ 
+ /// Non-blocking poll for readability. POSIX-only.
+-#[cfg(not(windows))]
++#[cfg(not(any(windows, all(target_family = "wasm", target_os = "unknown"))))]
+ pub fn is_readable(fd: Fd) -> Pollable {
+     debug_assert!(fd.is_valid());
+     let mut polls = [libc::pollfd {
+@@ -2597,7 +2602,7 @@ pub fn is_readable(_fd: Fd) -> Pollable {
+ }
+ 
+ /// Non-blocking `poll(fd, POLLOUT)` (or `WSAPoll` on Windows); reports writability.
+-#[cfg(not(windows))]
++#[cfg(not(any(windows, all(target_family = "wasm", target_os = "unknown"))))]
+ pub fn is_writable(fd: Fd) -> Pollable {
+     debug_assert!(fd.is_valid());
+     let mut polls = [libc::pollfd {
+@@ -2738,6 +2743,11 @@ pub fn self_exe_path() -> crate::CrateResult<&'static ZStr> {
+         //  test/js/node/test/parallel/test-process-execpath.js).
+         #[cfg(any(target_vendor = "apple", windows))]
+         let path = path.canonicalize().unwrap_or(path);
++        #[cfg(all(target_family = "wasm", not(unix)))]
++        {
++            let _ = path;
++            Err(crate::CrateError::Unexpected)
++        }
+         #[cfg(unix)]
+         {
+             use std::os::unix::ffi::OsStringExt;
+@@ -4415,7 +4425,7 @@ pub fn reload_process(clear_terminal: bool, may_return: bool) {
+         // Bun only targets POSIX + Windows; any other target
+         // is a build-time error, not a runtime panic.
+         let _ = (clear_terminal, may_return);
+-        compile_error!("unsupported platform for reload_process");
++        unreachable!("no reload_process on wasm");
+     }
+ }
+ 
+@@ -4983,6 +4993,11 @@ impl Timespec {
+     }
+ 
+     fn now_real() -> Timespec {
++        #[cfg(all(target_family = "wasm", not(unix)))]
++        {
++            // No clock on wasm32-unknown-unknown.
++            Timespec { sec: 0, nsec: 0 }
++        }
+         #[cfg(unix)]
+         {
+             let mut ts = libc::timespec {
+@@ -4992,7 +5007,7 @@ impl Timespec {
+             clock_gettime(libc::CLOCK_MONOTONIC, &mut ts);
+             Timespec {
+                 sec: ts.tv_sec,
+-                nsec: ts.tv_nsec,
++                nsec: ts.tv_nsec as _, // c_long is 32-bit on wasm32
+             }
+         }
+         #[cfg(windows)]
+diff --git a/src/errno/lib.rs b/src/errno/lib.rs
+index 2943fc5..b2c9b35 100644
+--- a/src/errno/lib.rs
++++ b/src/errno/lib.rs
+@@ -186,9 +186,10 @@ pub use freebsd_errno::*;
+ // Android shares the Linux kernel errno space (bionic copies <asm/errno.h>),
+ // so it uses the same per-errno enum. Rust splits `target_os` into
+ // `linux`/`android`, so list both.
+-#[cfg(any(target_os = "linux", target_os = "android"))]
++// wasm takes Linux's numbering: the crate needs a table to compile, and on wasm32-unknown-unknown nothing sets errno.
++#[cfg(any(target_os = "linux", target_os = "android", target_family = "wasm"))]
+ pub mod linux_errno;
+-#[cfg(any(target_os = "linux", target_os = "android"))]
++#[cfg(any(target_os = "linux", target_os = "android", target_family = "wasm"))]
+ pub use linux_errno::*;
+ #[cfg(windows)]
+ pub mod windows_errno;
+diff --git a/src/perf/Cargo.toml b/src/perf/Cargo.toml
+index 2c92a30..fae0b52 100644
+--- a/src/perf/Cargo.toml
++++ b/src/perf/Cargo.toml
+@@ -11,4 +11,7 @@ workspace = true
+ 
+ [dependencies]
+ bun_core.workspace = true
++
++# The OS layer, which wasm has none of.
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
+ bun_sys.workspace = true
+diff --git a/src/sema/atom.rs b/src/sema/atom.rs
+index 0640e46..944c2c5 100644
+--- a/src/sema/atom.rs
++++ b/src/sema/atom.rs
+@@ -113,6 +113,7 @@ impl Text {
+     const SHORT: usize = 22;
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(size_of::<Text>() == 24);
+ 
+ impl From<&[u8]> for Text {
+diff --git a/src/sema/resolve.rs b/src/sema/resolve.rs
+index a489774..096d678 100644
+--- a/src/sema/resolve.rs
++++ b/src/sema/resolve.rs
+@@ -52,17 +52,20 @@ impl Phase {
+ }
+ 
+ /// On drop, reports its lifetime to the host.
+-pub struct Spent<'a>(&'a dyn Host, Phase, Instant);
++pub struct Spent<'a>(&'a dyn Host, Phase, Option<Instant>);
+ 
+ impl<'a> Spent<'a> {
+     pub fn on(host: &'a dyn Host, phase: Phase) -> Spent<'a> {
+-        Spent(host, phase, Instant::now())
++        // wasm32-unknown-unknown has no clock: `Instant::now` panics.
++        Spent(host, phase, (!cfg!(all(target_family = "wasm", target_os = "unknown"))).then(Instant::now))
+     }
+ }
+ 
+ impl Drop for Spent<'_> {
+     fn drop(&mut self) {
+-        self.0.spent(self.1, self.2.elapsed());
++        if let Some(began) = self.2 {
++            self.0.spent(self.1, began.elapsed());
++        }
+     }
+ }
+ 
+diff --git a/src/sema/types.rs b/src/sema/types.rs
+index facbbfa..f7fb8b5 100644
+--- a/src/sema/types.rs
++++ b/src/sema/types.rs
+@@ -282,6 +282,7 @@ pub enum TypeArguments<'s> {
+     Deferred(ArenaBox<'s, DeferredTypeArguments>),
+ }
+ 
++#[cfg(target_pointer_width = "64")]
+ const _: () = assert!(size_of::<TypeArguments<'static>>() == 16);
+ 
+ /// `TypeReference.node` and `mapper`: the type reference to a generic class or interface, the array
+diff --git a/src/threading/Cargo.toml b/src/threading/Cargo.toml
+index 5269c71..dc6aaf0 100644
+--- a/src/threading/Cargo.toml
++++ b/src/threading/Cargo.toml
+@@ -19,4 +19,7 @@ bun_core.workspace = true
+ bun_collections.workspace = true
+ bun_ptr.workspace = true
+ bun_safety.workspace = true
++
++# The OS layer, which wasm has none of.
++[target.'cfg(not(target_family = "wasm"))'.dependencies]
+ bun_sys.workspace = true
+diff --git a/src/threading/Futex.rs b/src/threading/Futex.rs
+index a62d55c..a3ebae4 100644
+--- a/src/threading/Futex.rs
++++ b/src/threading/Futex.rs
+@@ -464,14 +464,25 @@ mod freebsd_impl {
+ mod wasm_impl {
+     use super::*;
+ 
++    // Without atomics there is one thread: nobody else can change `ptr`, so a wait that finds
++    // `expect` would never end.
++    #[cfg(not(target_feature = "atomics"))]
++    pub(crate) fn wait(ptr: &AtomicU32, expect: u32, timeout: Option<u64>) -> Result<(), TimeoutError> {
++        match (ptr.load(core::sync::atomic::Ordering::Acquire) != expect, timeout) {
++            (true, _) => Ok(()),
++            (false, Some(_)) => Err(TimeoutError::Timeout),
++            (false, None) => panic!("futex wait on the only thread"),
++        }
++    }
++    #[cfg(not(target_feature = "atomics"))]
++    pub fn wake(_ptr: *const AtomicU32, _max_waiters: u32) {}
++
++    #[cfg(target_feature = "atomics")]
+     pub(crate) fn wait(
+         ptr: &AtomicU32,
+         expect: u32,
+         timeout: Option<u64>,
+     ) -> Result<(), TimeoutError> {
+-        #[cfg(not(target_feature = "atomics"))]
+-        compile_error!("WASI target missing cpu feature 'atomics'");
+-
+         let to: i64 = match timeout {
+             Some(to) => i64::try_from(to).expect("int cast"),
+             None => -1,
+@@ -488,10 +499,8 @@ mod wasm_impl {
+         }
+     }
+ 
++    #[cfg(target_feature = "atomics")]
+     pub fn wake(ptr: *const AtomicU32, max_waiters: u32) {
+-        #[cfg(not(target_feature = "atomics"))]
+-        compile_error!("WASI target missing cpu feature 'atomics'");
+-
+         debug_assert!(max_waiters != 0);
+         // SAFETY: memory.atomic.notify only keys on the aligned address, and linear memory is
+         // never unmapped (see `super::wake_raw`); AtomicU32 has the layout of i32.
+diff --git a/src/threading/lib.rs b/src/threading/lib.rs
+index 70db8a4..4657d7a 100644
+--- a/src/threading/lib.rs
++++ b/src/threading/lib.rs
+@@ -1,3 +1,4 @@
++#![cfg_attr(target_family = "wasm", feature(stdarch_wasm_atomic_wait))] // for the wasm futex
+ //! bun_threading crate root — thin re-exports.
+ 
+ pub mod channel;
+diff --git a/src/windows_sys/externs.rs b/src/windows_sys/externs.rs
+index b84cbfd..d5790a7 100644
+--- a/src/windows_sys/externs.rs
++++ b/src/windows_sys/externs.rs
+@@ -1665,6 +1665,8 @@ const _: () = assert!(core::mem::offset_of!(TEB, ProcessEnvironmentBlock) == 0x6
+ /// obligation lives with the caller of the returned `*mut TEB`.
+ #[inline(always)]
+ pub fn teb() -> *mut TEB {
++    #[cfg(target_family = "wasm")]
++    { unreachable!("no TEB/PEB on wasm") }
+     #[cfg(target_arch = "x86_64")]
+     // SAFETY: on Windows x64 `gs:[0x30]` is the OS-maintained TEB self-
+     // pointer; reading it has no side effects and is always valid.
+@@ -1691,6 +1693,8 @@ pub fn teb() -> *mut TEB {
+ /// Rust's aliasing rules. Callers must read fields through raw-pointer deref.
+ #[inline(always)]
+ pub fn peb() -> *const PEB {
++    #[cfg(target_family = "wasm")]
++    { unreachable!("no TEB/PEB on wasm") }
+     #[cfg(target_arch = "x86_64")]
+     // SAFETY: reading `gs:[0x60]` is the documented Windows-x64 ABI for the
+     // current thread's PEB pointer; no caller precondition.
+diff --git a/src/semver/lib.rs b/src/semver/lib.rs
+index a7c31ff..29f1998 100644
+--- a/src/semver/lib.rs
++++ b/src/semver/lib.rs
+@@ -251,6 +251,7 @@ pub mod semver_string {
+     // Pointers are truncated to 63 bits via this mask.
+     const MAX_ADDRESSABLE_SPACE_MASK: u64 = (1u64 << 63) - 1;
+ 
++    #[cfg(target_pointer_width = "64")]
+     const _: () = assert!(
+         core::mem::size_of::<usize>() == 8,
+         "This code needs to be updated for non-64-bit architectures",

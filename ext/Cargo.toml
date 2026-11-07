@@ -1,0 +1,24 @@
+# The GDExtension that loads live-compile's library (`../core`) into Godot: one `LiveCompile` class whose `#[func]`s GodotJS
+# exposes (docs/tracks/live-compile.md). It is a separate extension from `godot_react_ui`, for the demo only, and has its own
+# toolchain (`../rust-toolchain.toml`: Bun's crates need a newer nightly than the UI extension's).
+[package]
+name = "live_compile_ext"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "live_compile"
+path = "lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The same binding as the UI extension (../../Cargo.toml): lean Web templates omit optional classes, so each method is
+# resolved on first use. No experimental-threads: the Godot API is only used on the main thread, and the service thread
+# touches nothing of it.
+godot = { version = "=0.5.5", features = ["api-custom-json", "lazy-function-tables"] }
+live_compile_core = { path = "../core" }
+serde_json = "1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bun_sema_mimalloc)"] }

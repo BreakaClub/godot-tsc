@@ -1,0 +1,17 @@
+# Not Bun's manifest: the stand-in for bun_crash_handler that live-compile/transpiler/scripts/vendor-bun.py writes in
+# its place (see stubs/src/crash_handler/lib.rs).
+[package]
+name = "bun_crash_handler"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+bstr.workspace = true
+bun_alloc.workspace = true
+bun_core.workspace = true

@@ -1,0 +1,12 @@
+diff --git a/src/js_parser/parse/parse_entry.rs b/src/js_parser/parse/parse_entry.rs
+index 4fc84c1..95bd6e8 100644
+--- a/src/js_parser/parse/parse_entry.rs
++++ b/src/js_parser/parse/parse_entry.rs
+@@ -2620,7 +2620,4 @@ struct PragmaState {
+     seen_bytecode: bool,
+ }
+ 
+-#[cfg(target_arch = "wasm32")]
+-pub type MacroContext = Option<*mut c_void>;
+-#[cfg(not(target_arch = "wasm32"))]
+ pub type MacroContext = crate::Macro::MacroContext;

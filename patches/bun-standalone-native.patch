@@ -1,0 +1,306 @@
+diff --git a/src/sema/standalone/native.rs b/src/sema/standalone/native.rs
+index afe27c2..90d9cc7 100644
+--- a/src/sema/standalone/native.rs
++++ b/src/sema/standalone/native.rs
+@@ -12,6 +12,55 @@ use core::ffi::{c_char, c_int, c_void};
+ mod fake_mimalloc {
+     use super::*;
+ 
++    /// `malloc`, `calloc` and `free`: the C library's, or on wasm, which has none, Rust's allocator with the size
++    /// kept in front of the block.
++    #[cfg(not(target_family = "wasm"))]
++    mod raw {
++        use core::ffi::c_void;
++        pub(super) unsafe fn malloc(size: usize) -> *mut c_void {
++            unsafe { libc::malloc(size) }
++        }
++        pub(super) unsafe fn calloc(size: usize) -> *mut c_void {
++            unsafe { libc::calloc(1, size) }
++        }
++        pub(super) unsafe fn free(p: *mut c_void) {
++            unsafe { libc::free(p) }
++        }
++    }
++    #[cfg(target_family = "wasm")]
++    mod raw {
++        use core::ffi::c_void;
++        const FRONT: usize = 16;
++        fn layout(size: usize) -> std::alloc::Layout {
++            std::alloc::Layout::from_size_align(size + FRONT, FRONT).unwrap()
++        }
++        unsafe fn place(base: *mut u8, size: usize) -> *mut c_void {
++            if base.is_null() {
++                return core::ptr::null_mut();
++            }
++            // SAFETY: the block has `FRONT` bytes in front.
++            unsafe {
++                base.cast::<usize>().write(size);
++                base.add(FRONT).cast()
++            }
++        }
++        pub(super) unsafe fn malloc(size: usize) -> *mut c_void {
++            unsafe { place(std::alloc::alloc(layout(size)), size) }
++        }
++        pub(super) unsafe fn calloc(size: usize) -> *mut c_void {
++            unsafe { place(std::alloc::alloc_zeroed(layout(size)), size) }
++        }
++        pub(super) unsafe fn free(p: *mut c_void) {
++            if p.is_null() {
++                return;
++            }
++            unsafe {
++                let base = p.cast::<u8>().sub(FRONT);
++                std::alloc::dealloc(base, layout(base.cast::<usize>().read()));
++            }
++        }
++    }
++
+     #[repr(C)]
+     struct Header {
+         /// The pointer `malloc` returned, for a block that is freed individually. Null for a block
+@@ -75,9 +124,9 @@ mod fake_mimalloc {
+         // SAFETY: plain libc allocation.
+         let base = unsafe {
+             if zero {
+-                libc::calloc(1, total)
++                raw::calloc(total)
+             } else {
+-                libc::malloc(total)
++                raw::malloc(total)
+             }
+         };
+         if base.is_null() {
+@@ -98,7 +147,7 @@ mod fake_mimalloc {
+         if heap.end - heap.at < total {
+             let chunk = total.max(CHUNK);
+             // SAFETY: plain libc allocation.
+-            let base = unsafe { libc::malloc(chunk) };
++            let base = unsafe { raw::malloc(chunk) };
+             if base.is_null() {
+                 return base;
+             }
+@@ -150,7 +199,7 @@ mod fake_mimalloc {
+         let base = unsafe { (*header(p)).base };
+         if !base.is_null() {
+             // SAFETY: `base` came from `malloc`.
+-            unsafe { libc::free(base) };
++            unsafe { raw::free(base) };
+         }
+     }
+ 
+@@ -170,7 +219,7 @@ mod fake_mimalloc {
+         let heap = unsafe { Box::from_raw(heap.cast::<Heap>()) };
+         for &chunk in &heap.chunks {
+             // SAFETY: from `malloc`.
+-            unsafe { libc::free(chunk) };
++            unsafe { raw::free(chunk) };
+         }
+     }
+     #[unsafe(no_mangle)]
+@@ -381,13 +430,13 @@ fn first(text: &[u8], f: impl Fn(u8) -> bool) -> usize {
+ 
+ // Weak: where the kernels themselves are linked, they count.
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_index_of_char(p: *const u8, len: usize, needle: u8) -> usize {
+     // SAFETY: the caller passes a slice, as a pointer and a length.
+     first(unsafe { bytes(p, len) }, |c| c == needle)
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_last_index_of_char(p: *const u8, len: usize, needle: u8) -> usize {
+     // SAFETY: the caller passes a slice, as a pointer and a length.
+     unsafe { bytes(p, len) }
+@@ -396,7 +445,7 @@ unsafe extern "C" fn highway_last_index_of_char(p: *const u8, len: usize, needle
+         .unwrap_or(len)
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_count_char(p: *const u8, len: usize, needle: u8) -> usize {
+     // SAFETY: the caller passes a slice, as a pointer and a length.
+     let text = unsafe { bytes(p, len) };
+@@ -406,7 +455,7 @@ unsafe extern "C" fn highway_count_char(p: *const u8, len: usize, needle: u8) ->
+         .sum()
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_line_starts(p: *const u8, len: usize, out: *mut u32) -> usize {
+     // SAFETY: the caller passes a slice, as a pointer and a length.
+     let text = unsafe { bytes(p, len) };
+@@ -419,7 +468,7 @@ unsafe extern "C" fn highway_line_starts(p: *const u8, len: usize, out: *mut u32
+     written
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_odd_blocks(p: *const u8, len: usize, out: *mut u64) {
+     // SAFETY: the caller passes a slice, as a pointer and a length.
+     let text = unsafe { bytes(p, len) };
+@@ -434,7 +483,7 @@ unsafe extern "C" fn highway_odd_blocks(p: *const u8, len: usize, out: *mut u64)
+     }
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_scanner_run_stops(
+     p: *const u8,
+     len: usize,
+@@ -464,7 +513,7 @@ unsafe extern "C" fn highway_scanner_run_stops(
+     }
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_index_of_any_char(
+     p: *const u8,
+     len: usize,
+@@ -506,7 +555,7 @@ unsafe extern "C" fn highway_index_of_any_char(
+     }
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_last_index_of_any_char(
+     p: *const u8,
+     len: usize,
+@@ -522,7 +571,7 @@ unsafe extern "C" fn highway_last_index_of_any_char(
+         .unwrap_or(len)
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_memmem(
+     h: *const u8,
+     h_len: usize,
+@@ -573,7 +622,7 @@ unsafe extern "C" fn highway_memmem(
+     core::ptr::null()
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_memrmem(
+     h: *const u8,
+     h_len: usize,
+@@ -594,7 +643,7 @@ unsafe extern "C" fn highway_memrmem(
+         .unwrap_or(usize::MAX)
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_memrmem16(
+     h: *const u16,
+     h_len: usize,
+@@ -620,7 +669,7 @@ unsafe extern "C" fn highway_memrmem16(
+         .unwrap_or(usize::MAX)
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_index_of_interesting_character_in_string_literal(
+     p: *const u8,
+     len: usize,
+@@ -632,7 +681,7 @@ unsafe extern "C" fn highway_index_of_interesting_character_in_string_literal(
+     })
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_index_of_interesting_character_in_multiline_comment(
+     p: *const u8,
+     len: usize,
+@@ -643,7 +692,7 @@ unsafe extern "C" fn highway_index_of_interesting_character_in_multiline_comment
+     })
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_index_of_newline_or_non_ascii_or_hash_or_at(
+     p: *const u8,
+     len: usize,
+@@ -654,7 +703,7 @@ unsafe extern "C" fn highway_index_of_newline_or_non_ascii_or_hash_or_at(
+     })
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_index_of_space_or_newline_or_non_ascii(
+     p: *const u8,
+     len: usize,
+@@ -663,7 +712,7 @@ unsafe extern "C" fn highway_index_of_space_or_newline_or_non_ascii(
+     first(unsafe { bytes(p, len) }, |c| c <= b' ' || c > 127)
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_contains_newline_or_non_ascii_or_quote(
+     p: *const u8,
+     len: usize,
+@@ -674,7 +723,7 @@ unsafe extern "C" fn highway_contains_newline_or_non_ascii_or_quote(
+         .any(|&c| !(0x20..=127).contains(&c) || c == b'"')
+ }
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_index_of_needs_escape_for_javascript_string(
+     p: *const u8,
+     len: usize,
+@@ -687,7 +736,7 @@ unsafe extern "C" fn highway_index_of_needs_escape_for_javascript_string(
+ }
+ /// `BUN_JSON_IDX_ODDITY`: `StructuralIndex` goes on with its scalar indexer.
+ #[unsafe(no_mangle)]
+-#[linkage = "weak"]
++#[cfg_attr(not(target_family = "wasm"), linkage = "weak")]
+ unsafe extern "C" fn highway_json_index_chunk(
+     _input: *const u8,
+     _len: usize,
+@@ -851,14 +900,41 @@ unsafe extern "C" fn simdutf__convert_utf16le_to_utf8_with_errors(
+         count: written,
+     }
+ }
++/// `simdutf::binary_to_base64`: the standard alphabet with `=` padding, or with `url` the URL-safe alphabet without padding
++/// (simdutf's `base64_default` and `base64_url`). React Fast Refresh's hook signatures are the base64 of a hash.
+ #[unsafe(no_mangle)]
+ unsafe extern "C" fn simdutf__base64_encode(
+-    _p: *const u8,
+-    _len: usize,
+-    _out: *mut u8,
+-    _url: c_int,
++    p: *const u8,
++    len: usize,
++    out: *mut u8,
++    url: c_int,
+ ) -> usize {
+-    unreachable!("nothing that parses encodes base64")
++    const STANDARD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
++    const URL_SAFE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
++    let alphabet = if url != 0 { URL_SAFE } else { STANDARD };
++    // SAFETY: the caller passes a slice, as a pointer and a length.
++    let source = unsafe { bytes(p, len) };
++    let mut written = 0;
++    for chunk in source.chunks(3) {
++        let group = u32::from(chunk[0]) << 16
++            | u32::from(chunk.get(1).copied().unwrap_or(0)) << 8
++            | u32::from(chunk.get(2).copied().unwrap_or(0));
++        // One byte makes two characters, two bytes three, three bytes four.
++        let characters = chunk.len() + 1;
++        for index in 0..4 {
++            let byte = if index < characters {
++                alphabet[((group >> (18 - 6 * index)) & 0x3F) as usize]
++            } else if url == 0 {
++                b'='
++            } else {
++                continue;
++            };
++            // SAFETY: the caller's buffer has room for the encoded length.
++            unsafe { out.add(written).write(byte) };
++            written += 1;
++        }
++    }
++    written
+ }
+ 
+ // ───────────────────────────── widths ─────────────────────────────

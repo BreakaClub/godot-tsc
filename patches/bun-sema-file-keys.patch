@@ -1,0 +1,26 @@
+diff --git a/src/sema/check/call.rs b/src/sema/check/call.rs
+index a50e8ae..0c7e24b 100644
+--- a/src/sema/check/call.rs
++++ b/src/sema/check/call.rs
+@@ -3079,7 +3079,7 @@ impl<'p, 's> Checker<'p, 's> {
+         &self,
+         inferred: &[TypeId],
+         own: &[TypeId],
+-        serial: usize,
++        serial: u64,
+     ) -> Option<Vec<TypeId>> {
+         let mut names: Vec<Atom> = inferred
+             .iter()
+diff --git a/src/sema/check/expr.rs b/src/sema/check/expr.rs
+index 6bf877e..2618c89 100644
+--- a/src/sema/check/expr.rs
++++ b/src/sema/check/expr.rs
+@@ -207,7 +207,7 @@ impl<'p, 's> Checker<'p, 's> {
+                 && let Some(unique) = c.unique_type_params(
+                     &n.inferred_type_params,
+                     &type_params,
+-                    ((file.0 as usize) << 32) | e.0 as usize,
++                    ((file.0 as u64) << 32) | e.0 as u64,
+                 )
+             {
+                 let instantiated = if unique[..] == type_params[..] {

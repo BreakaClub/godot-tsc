@@ -1,0 +1,14 @@
+# Not Bun's manifest: bun_io reduced to its byte-writer module (see stubs/src/io/lib.rs).
+[package]
+name = "bun_io"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+bun_core.workspace = true

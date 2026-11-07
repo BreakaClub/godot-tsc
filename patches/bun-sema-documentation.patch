@@ -1,0 +1,270 @@
+diff --git a/src/sema/check/jsdoc.rs b/src/sema/check/jsdoc.rs
+index 31581bc94..83b16c8be 100644
+--- a/src/sema/check/jsdoc.rs
++++ b/src/sema/check/jsdoc.rs
+@@ -584,10 +584,53 @@ struct Reader<'a, 's> {
+     /// `parse_tag_comments` collects the text in `comment_text`.
+     saves_comment_text: bool,
+     comment_text: Vec<u8>,
++    /// What `parse_jsdoc_comment_worker` collects of the comment's own text, if it is asked for (`own_text`).
++    own: Option<OwnText>,
+     /// For `Flavor::Oxc`.
+     rule: LineStartRule,
+ }
+ 
++/// `comments` and `margin` of `parseJSDocCommentWorker`: the comment's own text, the text before its tags.
++struct OwnText {
++    parts: Vec<Vec<u8>>,
++    /// `-1` in jsdoc.go: none yet.
++    margin: Option<usize>,
++    /// A link is in the text, which `own_text` does not write.
++    has_link: bool,
++}
++
++/// `removeTrailingWhitespace`: `trimEnd` trims what `isWhiteSpaceLike` is.
++fn remove_trailing_whitespace(parts: &mut Vec<Vec<u8>>) {
++    while let Some(last) = parts.last_mut() {
++        let kept = last.to_str_lossy().trim_end_matches(|ch: char| lexer::is_white_space_like(ch as i32)).len();
++        if kept > 0 {
++            last.truncate(kept);
++            return;
++        }
++        parts.pop();
++    }
++}
++
++/// The text of the JSDoc comment of `source` from `start` to `end` before its tags, as TypeScript's parser reads it
++/// (the `JSDocText` of `jsdoc.comments`) and `getDocumentationComment` writes it in plain text. `None` if a link is
++/// in it: writing one depends on what its name resolves to, which this does not ask.
++pub fn own_text(source: &[u8], start: usize, end: usize, is_stack_low: &dyn Fn() -> bool) -> Option<Vec<u8>> {
++    let mut reader = Reader::new(source, start, end, Flavor::TypeScript, false, is_stack_low);
++    reader.own = Some(OwnText { parts: Vec::new(), margin: None, has_link: false });
++    reader.parse_jsdoc_comment_worker(start);
++    let mut own = reader.own.take()?;
++    if own.has_link {
++        return None;
++    }
++    // "comments[len(comments)-1] = strings.TrimRightFunc(comments[len(comments)-1], unicode.IsSpace)": Go's
++    // `unicode.IsSpace` is Unicode's White_Space, as `trim_end` is.
++    if let Some(last) = own.parts.last_mut() {
++        let kept = last.to_str_lossy().trim_end().len();
++        last.truncate(kept);
++    }
++    Some(own.parts.concat())
++}
++
+ impl<'a, 's> Reader<'a, 's> {
+     /// For the comment of `source` from `start` to `end`, without `syntax`.
+     fn new(
+@@ -622,6 +665,7 @@ impl<'a, 's> Reader<'a, 's> {
+             child_search: None,
+             saves_comment_text: false,
+             comment_text: Vec::new(),
++            own: None,
+             rule: LineStartRule::new(start + 3),
+         }
+     }
+@@ -959,8 +1003,14 @@ impl<'a, 's> Reader<'a, 's> {
+             }
+             let token_len = self.scanner.pos - self.scanner.start;
+             let token = self.scanner.token;
++            // `pushComment`, of the token's text, for the arms that save it.
++            let mut pushes = false;
+             match token {
+                 JSDocToken::At if self.starts_tag(in_fenced_code_block) => {
++                    if let Some(own) = self.own.as_mut() {
++                        remove_trailing_whitespace(&mut own.parts);
++                        own.margin = None;
++                    }
+                     let tag = self.parse_tag(&tags, indent);
+                     if self.syntax.is_some() {
+                         tags.push(tag);
+@@ -968,6 +1018,9 @@ impl<'a, 's> Reader<'a, 's> {
+                     state = JSDocState::BeginningOfLine;
+                 }
+                 JSDocToken::NewLineTrivia => {
++                    if let Some(own) = self.own.as_mut() {
++                        own.parts.push(self.text[self.scanner.start..self.scanner.pos].to_vec());
++                    }
+                     state = JSDocState::BeginningOfLine;
+                     indent = 0;
+                 }
+@@ -976,34 +1029,57 @@ impl<'a, 's> Reader<'a, 's> {
+                     state = JSDocState::SawAsterisk;
+                     indent += token_len;
+                 }
+-                JSDocToken::WhitespaceTrivia => indent += token_len,
++                JSDocToken::WhitespaceTrivia => {
++                    // "only collect whitespace if we're already saving comments or have just crossed the comment indent margin"
++                    if let Some(own) = self.own.as_mut()
++                        && let Some(margin) = own.margin
++                        && indent + token_len > margin
++                    {
++                        let existing = margin as isize - indent as isize;
++                        let existing = if existing < 0 { existing + token_len as isize } else { existing }.max(0) as usize;
++                        own.parts.push(self.text[self.scanner.start + existing..self.scanner.pos].to_vec());
++                    }
++                    indent += token_len;
++                }
+                 JSDocToken::EndOfFile => break,
+                 JSDocToken::Backtick => {
+                     backtick_count += 1;
+                     state = state.toggle_backticks();
+-                    indent += token_len;
++                    pushes = true;
+                 }
+                 JSDocToken::OpenBrace if self.can_start_link(in_fenced_code_block) => {
+                     state = JSDocState::SavingComments;
+-                    if !self.parse_jsdoc_link() {
+-                        indent += token_len;
++                    if self.parse_jsdoc_link() {
++                        if let Some(own) = self.own.as_mut() {
++                            own.has_link = true;
++                        }
++                    } else {
++                        pushes = true;
+                     }
+                 }
+                 JSDocToken::Asterisk => {
+                     state = JSDocState::SavingComments;
+-                    indent += token_len;
++                    pushes = true;
+                 }
+                 JSDocToken::At | JSDocToken::OpenBrace => {
+                     state = JSDocState::saving(in_fenced_code_block);
+-                    indent += token_len;
++                    pushes = true;
+                 }
+                 _ => {
+                     if state != JSDocState::SavingBackticks {
+                         state = JSDocState::saving(in_fenced_code_block);
+                     }
+-                    indent += token_len;
++                    pushes = true;
+                 }
+             }
++            if pushes {
++                if let Some(own) = self.own.as_mut() {
++                    // "if margin == -1 { margin = indent }"
++                    own.margin.get_or_insert(indent);
++                    own.parts.push(self.text[self.scanner.start..self.scanner.start + token_len].to_vec());
++                }
++                indent += token_len;
++            }
+             if state.is_saving() {
+                 self.next_jsdoc_comment_text_token(state == JSDocState::SavingBackticks);
+             } else {
+diff --git a/src/sema/check/services/jsdoc.rs b/src/sema/check/services/jsdoc.rs
+index 5c3b383d7..8c2f74da8 100644
+--- a/src/sema/check/services/jsdoc.rs
++++ b/src/sema/check/services/jsdoc.rs
+@@ -223,6 +223,12 @@ impl<'c, 'p, 's> Services<'c, 'p, 's> {
+ 
+     /// `last(node.jsDoc)`
+     fn tags_attached_to(&self, file: FileId, node: Node, text: &[u8]) -> Option<Tags> {
++        let (start, end) = self.js_doc_attached_to(file, node, text)?;
++        Some(parse_tags(text, start, end, &|| self.c.is_stack_low()))
++    }
++
++    /// Where `last(node.jsDoc)` is: its `/**` and the end of its `*/`.
++    fn js_doc_attached_to(&self, file: FileId, node: Node, text: &[u8]) -> Option<(usize, usize)> {
+         let hir = self.c.hir(file);
+         let kind = hir.kind(node);
+         if !can_have_js_doc(kind) {
+@@ -256,8 +262,7 @@ impl<'c, 'p, 's> Services<'c, 'p, 's> {
+             let comment = text.get(range.0..range.1).unwrap_or_default();
+             comment.starts_with(b"/**") && comment.get(3) != Some(&b'/')
+         };
+-        let &(start, end) = ranges.iter().rfind(is_js_doc)?;
+-        Some(parse_tags(text, start, end, &|| self.c.is_stack_low()))
++        ranges.iter().rfind(is_js_doc).copied()
+     }
+ 
+     /// `getNextJSDocCommentLocation`
+@@ -457,6 +462,86 @@ impl<'c, 'p, 's> Services<'c, 'p, 's> {
+         None
+     }
+ 
++    /// `symbol.getDocumentationComment(checker)` of a property, in plain text (`GetSymbolDocumentationComment`): of each
++    /// of its declarations once, the text of the JSDoc comment `getJSDocOrTag` finds for it before its tags, each text
++    /// once, joined by line breaks. `None` if one of them has a link, which this does not write.
++    ///
++    /// Only what `getJSDocOrTag` does for a property is done: a declaration that is not a property's panics.
++    pub fn documentation_of_property(&mut self, symbol: SymbolRef) -> Option<Vec<u8>> {
++        let declarations = self.declarations(symbol).to_vec();
++        let name = self.symbol_info(symbol).name.to_vec();
++        let mut seen = Vec::new();
++        let mut parts: Vec<Vec<u8>> = Vec::new();
++
++        for (i, &declaration) in declarations.iter().enumerate() {
++            if declarations[..i].contains(&declaration) {
++                continue;
++            }
++            let text = match self.js_doc_or_tag_of_property(declaration, &name, &mut seen) {
++                Some(comment) => self.documentation_of_comment(comment)?,
++                None => Vec::new(),
++            };
++            if !text.is_empty() && !parts.contains(&text) {
++                parts.push(text);
++            }
++        }
++        Some(parts.join(&b'\n'))
++    }
++
++    /// `getJSDocOrTag` of a declaration of the property `name`: its JSDoc comment, else that of the property `name` of a
++    /// base type of the interface or class that declares it (`seenSymbols`: each once). The file and the comment.
++    fn js_doc_or_tag_of_property(&mut self, declaration: NodeRef, name: &[u8], seen: &mut Vec<SymbolRef>) -> Option<(FileId, (usize, usize))> {
++        let (hir, at) = self.valid(declaration)?;
++        let kind = hir.kind(at);
++        assert!(
++            matches!(kind, Kind::PropertySignature | Kind::PropertyDeclaration | Kind::PropertyAssignment | Kind::ShorthandPropertyAssignment),
++            "the documentation of a {kind:?} is not written"
++        );
++        let file = declaration.file;
++        if let Some(Some(range)) = self.with_text(file, |text| self.js_doc_attached_to(file, at, text)) {
++            return Some((file, range));
++        }
++        let parent = NodeRef { node: hir.parent(at), ..declaration };
++        if !matches!(self.node_kind(parent), Kind::ClassDeclaration | Kind::ClassExpression | Kind::InterfaceDeclaration) {
++            return None;
++        }
++        assert!(!hir.flags(at).contains(Flags::STATIC), "the documentation of a static member is not written");
++        let container = NodeRef { node: self.node_child(parent, Child::Name), ..parent };
++        let container = self.symbol_at_location(container)?;
++        let declared = self.declared_type_of_symbol(container);
++        let bases = self.base_types(declared).to_vec();
++
++        for base in bases {
++            let Some(property) = self.property_of_type(base, name) else {
++                continue;
++            };
++            let Some(value) = self.value_declaration(property) else {
++                continue;
++            };
++            if seen.contains(&property) {
++                continue;
++            }
++            seen.push(property);
++            if let Some(found) = self.js_doc_or_tag_of_property(value, name, seen) {
++                return Some(found);
++            }
++        }
++        None
++    }
++
++    /// `writeComments(jsdoc.Comments())` in plain text, of a comment found for a declaration: nothing of one with a
++    /// `@typedef` or a `@callback` (`containsTypedefTag`). `None` for one with a link.
++    fn documentation_of_comment(&mut self, (file, (start, end)): (FileId, (usize, usize))) -> Option<Vec<u8>> {
++        let is_stack_low = || self.c.is_stack_low();
++        let written = self.with_text(file, |text| {
++            if parse_tags(text, start, end, &is_stack_low).set.contains(TagSet::TYPEDEF) {
++                return Some(Vec::new());
++            }
++            super::super::jsdoc::own_text(text, start, end, &is_stack_low)
++        });
++        written.unwrap_or_else(|| panic!("the text of a declaration file is not kept"))
++    }
++
+     /// The text of the `@deprecated` tag among `getJSDocTags(node)`.
+     pub fn deprecation_of_node(&mut self, node: NodeRef) -> Option<&'c [u8]> {
+         let reason = self.js_doc_tags(node).deprecated?;

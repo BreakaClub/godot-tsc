@@ -1,0 +1,30 @@
+# live-compile: Bun's TypeScript checker and JavaScript compiler for the demo's code editor (docs/tracks/live-compile.md).
+# `core` is the library, `ext` the GDExtension that loads it into Godot. The vendored crates (`vendor/bun`, written by
+# `scripts/vendor-bun.py`) are a workspace of their own, used as path dependencies, as UCGE's type checker and
+# Luanalysis use their extractions of `bun_sema`.
+#
+# Bun's toolchain (`rust-toolchain.toml`): Bun's revision needs a nightly newer than the repository's Web one
+# (`core::alloc::AllocatorClone`), so this directory has a toolchain of its own.
+[workspace]
+resolver = "2"
+members = ["core", "ext"]
+exclude = ["vendor"]
+
+# Bun's release profile (vendor/bun's upstream workspace): one codegen unit a crate. The panics of a request are caught on
+# the thread that runs it (`Service::handle`), so unwinding stays.
+[profile.release]
+lto = "off"
+codegen-units = 1
+debug = false
+strip = true
+
+# The WebAssembly module: no unwinding there (a panic traps; `wasm.rs` keeps its message).
+[profile.wasm]
+inherits = "release"
+panic = "abort"
+
+# Bun's own setting for the React Compiler crate (its Cargo.toml's [profile.release.package.bun_react_compiler]).
+[profile.release.package.bun_react_compiler]
+opt-level = "s"
+[profile.wasm.package.bun_react_compiler]
+opt-level = "s"
