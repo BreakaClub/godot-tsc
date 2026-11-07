@@ -210,9 +210,12 @@ struct Related<'p> {
     message_chain: Vec<MessageChain>,
 }
 
+/// What related information is compared by: the file's path, the start and end (or -1), the code, the arguments.
+type RelatedKey<'a> = (&'a [u8], i64, i64, u32, &'a [Box<[u8]>]);
+
 impl Related<'_> {
     /// `Loc`: related information without a span has `UndefinedTextRange`, which comes before offset 0.
-    fn key(&self) -> (&[u8], i64, i64, u32, &[Box<[u8]>]) {
+    fn key(&self) -> RelatedKey<'_> {
         match self.at {
             Some((_, path, start, end)) => (typescript_path(path), i64::from(start), i64::from(end), self.code, &self.args),
             None => (b"", -1, -1, self.code, &self.args),
@@ -376,28 +379,44 @@ impl Drop for Shared {
     }
 }
 
+/// How many configurations' runs an instance keeps. Each holds the parse of every file its program reached that is no root (the lib files,
+/// React's declarations, the library's), about 8 MB for a lab; a host that checks lab after lab without an edit between them (an edit
+/// forgets the runs of the other configurations, `forget_for`) would otherwise keep them all.
+const KEPT_CONFIGURATIONS: usize = 4;
+
 /// The runs of an instance, by the path of their configuration.
 #[derive(Default)]
 pub struct Runs {
     by_config: BTreeMap<Vec<u8>, Rc<Shared>>,
+    /// The configurations in the order they were last used, the latest last.
+    used: Vec<Vec<u8>>,
 }
 
 impl Runs {
     /// The run for `config`, whose roots are `roots`: a new one if it has none, or had other roots.
     fn for_config(&mut self, config: &[u8], roots: &[Vec<u8>]) -> Rc<Shared> {
-        match self.by_config.get(config) {
+        let shared = match self.by_config.get(config) {
             Some(shared) if shared.roots == roots => shared.clone(),
             _ => {
                 let shared = Rc::new(Shared::new(roots));
                 self.by_config.insert(config.to_vec(), shared.clone());
                 shared
             }
+        };
+        self.used.retain(|used| used != config);
+        self.used.push(config.to_vec());
+        while self.used.len() > KEPT_CONFIGURATIONS {
+            let oldest = self.used.remove(0);
+            self.by_config.remove(&oldest);
         }
+        shared
     }
 
     /// Forgets each run that `path` is not a root of: the file it parsed there, or the files it resolved, changed.
     pub fn forget_for(&mut self, path: &[u8]) {
         self.by_config.retain(|_, shared| shared.roots.iter().any(|root| root == path));
+        let kept = &self.by_config;
+        self.used.retain(|config| kept.contains_key(config));
     }
 }
 
@@ -444,7 +463,7 @@ pub fn check(host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8]) 
     let deepest_stack = checker.deepest_stack();
     drop(checker);
     let globals = program.global_errors();
-    assert!(globals.is_empty(), "global errors: {:?}", texts(globals.into_iter().map(|(code, args)| (code, args))));
+    assert!(globals.is_empty(), "global errors: {:?}", texts(globals.into_iter()));
     let name = |file: FileId| program.files.modules[file.idx()].file_name();
     let mut diagnostics = Vec::new();
 

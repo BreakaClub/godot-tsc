@@ -157,7 +157,8 @@ bun_ast::link_impl_TranspilerCacheImpl! {
     }
 }
 
-/// Bun's macros run JavaScript at build time; `features.no_macros` is set.
+/// Bun's macros run JavaScript at build time; `features.no_macros` is set. The parameters are the ones Bun's declaration of this function has.
+#[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 fn __bun_macro_context_call(
     _context: &mut bun_js_parser::Macro::MacroContext,

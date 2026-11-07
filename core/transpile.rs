@@ -69,9 +69,8 @@ pub fn transpile(request: &TranspileRequest) -> Response {
     let source = Source::init_path_string(request.path.as_str(), request.source.as_str());
     let define = Define::default();
 
-    let mut pragma = jsx::Pragma::default();
     // The production calls: `jsx` and `jsxs` from `react/jsx-runtime`, not `jsxDEV` with `__source`.
-    pragma.development = false;
+    let pragma = jsx::Pragma { development: false, ..Default::default() };
     let mut options = ParserOptions::init(pragma, loader);
     options.features.allow_runtime = false;
     options.features.auto_import_jsx = true;

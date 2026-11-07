@@ -62,6 +62,13 @@ pub fn hover(host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8], 
     out
 }
 
+/// A file of a project: the project's configuration and lib directory, and the file's path.
+pub struct FileInProject<'a> {
+    pub config: &'a [u8],
+    pub lib_dir: &'a [u8],
+    pub path: &'a [u8],
+}
+
 /// How many parameter names an argument list gets: none, those of arguments that are literals (the editors' usual choice), or all of
 /// them but the arguments that are the parameter's own name.
 #[derive(Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -103,17 +110,9 @@ fn is_literal(kind: Kind) -> bool {
 /// ```json
 /// {"ok":true,"hints":[{"position":n,"label":": string","kind":"type"},{"position":n,"label":"initialState:","kind":"parameter"}]}
 /// ```
-pub fn inlay_hints(
-    host: &MemoryHost,
-    runs: &mut Runs,
-    config: &[u8],
-    lib_dir: &[u8],
-    path: &[u8],
-    from: usize,
-    to: usize,
-    names: ParameterNames,
-) -> String {
-    let found = check::with_services_of(host, runs, config, lib_dir, path, |services, file, text| {
+pub fn inlay_hints(host: &MemoryHost, runs: &mut Runs, file: &FileInProject, range: (usize, usize), names: ParameterNames) -> String {
+    let (from, to) = range;
+    let found = check::with_services_of(host, runs, file.config, file.lib_dir, file.path, |services, file, text| {
         let positions = Positions::new(text);
         let (from, to) = (byte_of(text, from), byte_of(text, to));
         let mut hints: Vec<Hint> = Vec::new();

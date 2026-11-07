@@ -168,7 +168,7 @@ impl<'x, 'a> Lowerer<'x, 'a> {
     fn check_free_names(&self) -> Result<(), Diagnostic> {
         for (name, member) in self.ast.module_scope.members.iter() {
             // `exports`, `module` and `require` are declared by the parser in every file, at no position.
-            if member.loc.start >= 0 && FREE_NAMES.contains(&name.as_ref()) {
+            if member.loc.start >= 0 && FREE_NAMES.contains(&name) {
                 let position = member.loc.start as usize;
                 return Err(Diagnostic {
                     start: position,
@@ -215,12 +215,13 @@ impl<'x, 'a> Lowerer<'x, 'a> {
         // Temporaries are in whatever scope made them: all symbols are looked at, by their exact shape.
         for index in 0..self.ast.symbols.len() {
             let name = self.ast.symbols.as_slice()[index].original_name.slice().to_vec();
-            if let Some(number) = name.strip_prefix(TEMPORARY_PREFIX).and_then(|rest| rest.strip_suffix(&[TEMPORARY_SUFFIX][..])) {
-                if !number.is_empty() && number.iter().all(u8::is_ascii_hexdigit) {
-                    let wanted = [b"_tmp".as_slice(), number].concat();
-                    let ref_ = Ref::init(u32::try_from(index).expect("a file has fewer than 2^32 symbols"), self.source_index, false);
-                    self.rename(ref_, &wanted);
-                }
+            if let Some(number) = name.strip_prefix(TEMPORARY_PREFIX).and_then(|rest| rest.strip_suffix(&[TEMPORARY_SUFFIX][..]))
+                && !number.is_empty()
+                && number.iter().all(u8::is_ascii_hexdigit)
+            {
+                let wanted = [b"_tmp".as_slice(), number].concat();
+                let ref_ = Ref::init(u32::try_from(index).expect("a file has fewer than 2^32 symbols"), self.source_index, false);
+                self.rename(ref_, &wanted);
             }
         }
     }
@@ -336,7 +337,7 @@ impl<'x, 'a> Lowerer<'x, 'a> {
 
     /// A name for the variable that holds a module's exports: the specifier as an identifier, after a `_`.
     fn namespace_base(specifier: &str) -> Vec<u8> {
-        let trimmed = specifier.trim_start_matches(|c: char| c == '.' || c == '/' || c == '@');
+        let trimmed = specifier.trim_start_matches(['.', '/', '@']);
         let mut name = String::from("_");
         let mut previous_underscore = true;
         for c in trimmed.chars() {

@@ -26,12 +26,10 @@ pub fn position(text: &str, byte: usize) -> Position {
                 line += 1;
                 line_start = offset;
             }
-            '\r' => {
-                // "\r\n" is one break, counted at its "\n".
-                if chars.peek() != Some(&'\n') {
-                    line += 1;
-                    line_start = offset;
-                }
+            // "\r\n" is one break, counted at its "\n".
+            '\r' if chars.peek() != Some(&'\n') => {
+                line += 1;
+                line_start = offset;
             }
             _ => {}
         }
