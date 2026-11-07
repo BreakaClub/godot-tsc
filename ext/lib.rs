@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct LiveCompileExtension;
 
@@ -34,6 +34,7 @@ const SERVICE_STACK_BYTES: usize = 8 << 20;
 /// How long a call that waits (`compile`, `ping`) waits for the service thread before it says so. A wait is bounded because a thread
 /// that never runs (in a browser, a pthread that the page has no worker for) must be an error, not a page that hangs.
 const CALL_DEADLINE: Duration = Duration::from_secs(30);
+const MILLISECONDS_PER_SECOND: f64 = 1000.0;
 /// What the stack budget leaves for the frames above a request and for the guard page.
 const STACK_RESERVE_BYTES: usize = 256 << 10;
 
@@ -115,12 +116,16 @@ fn serve(shared: &Shared) {
                 let _ = service.handle(request);
             }
             Job::Check { id, config, lib_dir } => {
+                let started = Instant::now();
                 let result = service.handle(Request::Check { config, lib_dir });
-                shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"check\",\"result\":{result}}}")));
+                let ms = started.elapsed().as_secs_f64() * MILLISECONDS_PER_SECOND;
+                shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"check\",\"ms\":{ms:.3},\"result\":{result}}}")));
             }
             Job::Query { id, request } => {
+                let started = Instant::now();
                 let result = service.handle(request);
-                shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"query\",\"result\":{result}}}")));
+                let ms = started.elapsed().as_secs_f64() * MILLISECONDS_PER_SECOND;
+                shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"query\",\"ms\":{ms:.3},\"result\":{result}}}")));
             }
             Job::Call { request, reply } => {
                 // The caller may have gone: a send that fails is nobody's loss.
@@ -261,7 +266,10 @@ impl LiveCompile {
             Ok(request) => self.worker().shared.push(Job::Query { id, request }),
             Err(error) => {
                 let failed = live_compile_core::failure(format!("invalid request: {error}"));
-                self.worker().shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"query\",\"result\":{failed}}}")));
+                self.worker()
+                    .shared
+                    .lock_replies()
+                    .push_back(Reply(format!("{{\"id\":{id},\"kind\":\"query\",\"ms\":0,\"result\":{failed}}}")));
             }
         }
         id
