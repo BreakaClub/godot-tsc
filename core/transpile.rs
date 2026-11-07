@@ -1,7 +1,7 @@
 //! One `transpile` request: parse with Bun's parser, print with Bun's printer.
 
 use crate::positions::position;
-use crate::protocol::{Diagnostic, Failed, Response, Severity, Transpiled, TranspileRequest};
+use crate::protocol::{Diagnostic, Failed, Response, Severity, TranspileRequest, Transpiled};
 use bun_alloc::Arena;
 use bun_ast::{ASTMemoryAllocator, Loader, Log, Source};
 use bun_js_parser::{Define, Parser, ParserOptions};

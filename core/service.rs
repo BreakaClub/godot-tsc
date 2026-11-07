@@ -55,7 +55,9 @@ impl Service {
 
     fn dispatch(&mut self, request: Request) -> String {
         match request {
-            Request::Ping => to_json(&Response::Pong(Pong { ok: true, name: crate::protocol::NAME, bun_revision: crate::protocol::BUN_REVISION })),
+            Request::Ping => {
+                to_json(&Response::Pong(Pong { ok: true, name: crate::protocol::NAME, bun_revision: crate::protocol::BUN_REVISION }))
+            }
             Request::Transpile(request) => to_json(&crate::transpile::transpile(&request)),
             Request::SetFile(file) => {
                 self.set_file(file);
@@ -75,6 +77,16 @@ impl Service {
             Request::Hover { config, lib_dir, path, offset } => {
                 crate::services::hover(&self.host, &mut self.runs, config.as_bytes(), lib_dir.as_bytes(), path.as_bytes(), offset)
             }
+            Request::InlayHints { config, lib_dir, path, from, to, parameter_names } => crate::services::inlay_hints(
+                &self.host,
+                &mut self.runs,
+                config.as_bytes(),
+                lib_dir.as_bytes(),
+                path.as_bytes(),
+                from,
+                to,
+                parameter_names,
+            ),
             Request::Check { config, lib_dir } => {
                 let report = check::check(&self.host, &mut self.runs, config.as_bytes(), lib_dir.as_bytes());
                 format!("{{\"ok\":true,\"report\":{report}}}")

@@ -1,0 +1,3 @@
+# The host crates (core, ext) are formatted; the vendored crates under vendor/ are Bun's and are not.
+max_width = 140
+use_small_heuristics = "Max"

@@ -136,7 +136,7 @@ pub extern "C" fn Bun__collateUTF16(_numeric_and_base: bool, _a: *const u16, _a_
 /// `import.meta.url` as a `file:` URL, inlined for Bun's Bake framework or a bundled CommonJS output: neither is a
 /// setting of this host.
 #[unsafe(no_mangle)]
-pub extern "C" fn URL__getFileURLString(_input: *const c_void) -> ! {
+pub extern "C" fn URL__getFileURLString(_input: &bun_core::String) -> bun_core::String {
     unreachable!("this host inlines no import.meta.url");
 }
 

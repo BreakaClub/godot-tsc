@@ -10,12 +10,13 @@
 //! a condition variable, and the caller asks for frames (or a timer) only while a request is outstanding.
 
 use godot::prelude::*;
-use live_compile_core::protocol::{FileText, Request, TranspileRequest};
 use live_compile_core::Service;
+use live_compile_core::protocol::{FileText, Request, TranspileRequest};
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 struct LiveCompileExtension;
 
@@ -23,9 +24,16 @@ struct LiveCompileExtension;
 unsafe impl ExtensionLibrary for LiveCompileExtension {}
 
 /// The stack the service thread is given. The parser, the printer and the checker recurse on the depth of the program; the
-/// checker keeps a budget of the stack it has (`set_stack_size`) and reports the files it ran out of room in. The memory is
-/// reserved, not committed.
+/// checker keeps a budget of the stack it has (`set_stack_size`) and reports the files it ran out of room in. On a desktop the memory is
+/// reserved and not committed, so it is generous. In a browser a thread's stack is taken out of the one WebAssembly memory, and all of it
+/// is committed: 8 MB, which is what UCGE's WebAssembly checker has and is enough for the labs.
+#[cfg(not(target_os = "emscripten"))]
 const SERVICE_STACK_BYTES: usize = 64 << 20;
+#[cfg(target_os = "emscripten")]
+const SERVICE_STACK_BYTES: usize = 8 << 20;
+/// How long a call that waits (`compile`, `ping`) waits for the service thread before it says so. A wait is bounded because a thread
+/// that never runs (in a browser, a pthread that the page has no worker for) must be an error, not a page that hangs.
+const CALL_DEADLINE: Duration = Duration::from_secs(30);
 /// What the stack budget leaves for the frames above a request and for the guard page.
 const STACK_RESERVE_BYTES: usize = 256 << 10;
 
@@ -35,6 +43,8 @@ enum Job {
     Project(Request),
     /// A check, answered through `poll`; dropped if a newer check is made before it starts.
     Check { id: i64, config: String, lib_dir: String },
+    /// An editor-services request (hover, inlay hints), answered through `poll` as `{"id":n,"kind":"query","result":{...}}`.
+    Query { id: i64, request: Request },
     /// A request whose caller waits for the answer (a transpile, a ping).
     Call { request: Request, reply: Sender<String> },
 }
@@ -68,11 +78,8 @@ impl Shared {
         let mut queue = self.lock_queue();
         if let Job::Check { id, .. } = &job {
             // A check that has not begun is replaced by this one; its asker is told.
-            let dropped: Vec<i64> = queue
-                .jobs
-                .iter()
-                .filter_map(|queued| if let Job::Check { id, .. } = queued { Some(*id) } else { None })
-                .collect();
+            let dropped: Vec<i64> =
+                queue.jobs.iter().filter_map(|queued| if let Job::Check { id, .. } = queued { Some(*id) } else { None }).collect();
             queue.jobs.retain(|queued| !matches!(queued, Job::Check { .. }));
             let mut replies = self.lock_replies();
             for superseded in dropped {
@@ -110,6 +117,10 @@ fn serve(shared: &Shared) {
             Job::Check { id, config, lib_dir } => {
                 let result = service.handle(Request::Check { config, lib_dir });
                 shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"check\",\"result\":{result}}}")));
+            }
+            Job::Query { id, request } => {
+                let result = service.handle(request);
+                shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"query\",\"result\":{result}}}")));
             }
             Job::Call { request, reply } => {
                 // The caller may have gone: a send that fails is nobody's loss.
@@ -165,12 +176,26 @@ impl LiveCompile {
     fn call(&mut self, request: Request) -> GString {
         let (reply, answer) = mpsc::channel();
         self.worker().shared.push(Job::Call { request, reply });
-        GString::from(&answer.recv().unwrap_or_else(|_| live_compile_core::failure("the service thread ended".to_string())))
+        let reply = answer.recv_timeout(CALL_DEADLINE).unwrap_or_else(|error| {
+            live_compile_core::failure(format!(
+                "the live-compile service thread did not answer: {error} (waited {} s)",
+                CALL_DEADLINE.as_secs()
+            ))
+        });
+        GString::from(&reply)
     }
 
     fn next_id(&mut self) -> i64 {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// Starts the service thread now instead of at the first request. A browser starts a pthread from its pool of workers, and a page
+    /// that asks for the thread and waits for it in the same turn can wait for ever if the pool is empty (docs/WEB.md): the owner starts it
+    /// early, and the wait is bounded anyway.
+    #[func]
+    fn start(&mut self) {
+        self.worker();
     }
 
     /// The library's name and the Bun revision it is made from, as JSON.
@@ -223,6 +248,22 @@ impl LiveCompile {
     fn request_check(&mut self, config: GString, lib_dir: GString) -> i64 {
         let id = self.next_id();
         self.worker().shared.push(Job::Check { id, config: config.to_string(), lib_dir: lib_dir.to_string() });
+        id
+    }
+
+    /// Starts an editor-services request, given as JSON (`{"op":"hover",...}`, `{"op":"inlayHints",...}`: `live-compile/core/protocol.rs`).
+    /// Returns the id the reply carries, which `poll` hands over as a `query` reply. A request that is not valid is answered at once, as
+    /// a failed result.
+    #[func]
+    fn request_query(&mut self, request_json: GString) -> i64 {
+        let id = self.next_id();
+        match serde_json::from_str::<Request>(&request_json.to_string()) {
+            Ok(request) => self.worker().shared.push(Job::Query { id, request }),
+            Err(error) => {
+                let failed = live_compile_core::failure(format!("invalid request: {error}"));
+                self.worker().shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"query\",\"result\":{failed}}}")));
+            }
+        }
         id
     }
 

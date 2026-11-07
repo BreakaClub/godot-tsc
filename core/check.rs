@@ -97,14 +97,7 @@ impl Host for MemoryHost {
     fn scripts_of_page(&self, _: &[u8]) -> Vec<Vec<u8>> {
         Vec::new()
     }
-    fn parse<'s>(
-        &self,
-        arena: &'s Arena,
-        path: &[u8],
-        text: &[u8],
-        atoms: &Interner<'s>,
-        options: ParseOptions,
-    ) -> hir::File<'s> {
+    fn parse<'s>(&self, arena: &'s Arena, path: &[u8], text: &[u8], atoms: &Interner<'s>, options: ParseOptions) -> hir::File<'s> {
         bun_sema_parser::summarize(
             arena,
             path,
@@ -118,11 +111,7 @@ impl Host for MemoryHost {
     /// The project resolves its packages through `paths`, so no `package.json` is read. One that is asked for is
     /// unreadable to the checker, which then resolves as if it had none.
     fn parse_package_json(&self, _: &Arena, path: &[u8]) -> Option<Json> {
-        assert!(
-            !self.files.contains_key(path),
-            "the host does not parse package.json files, and {} is one",
-            String::from_utf8_lossy(path)
-        );
+        assert!(!self.files.contains_key(path), "the host does not parse package.json files, and {} is one", String::from_utf8_lossy(path));
         None
     }
     fn parallel(&self, count: usize, work: &(dyn Fn(usize) + Sync)) {
@@ -238,16 +227,13 @@ impl Related<'_> {
 /// `compareMessageChainSize`
 fn compare_message_chain_size(c1: &[MessageChain], c2: &[MessageChain]) -> Ordering {
     let by_length = c2.len().cmp(&c1.len());
-    c1.iter()
-        .zip(c2)
-        .fold(by_length, |c, (c1, c2)| c.then_with(|| compare_message_chain_size(&c1.message_chain, &c2.message_chain)))
+    c1.iter().zip(c2).fold(by_length, |c, (c1, c2)| c.then_with(|| compare_message_chain_size(&c1.message_chain, &c2.message_chain)))
 }
 
 /// `compareMessageChainContent`, of chains of the same size.
 fn compare_message_chain_content(c1: &[MessageChain], c2: &[MessageChain]) -> Ordering {
     c1.iter().zip(c2).fold(Ordering::Equal, |c, (c1, c2)| {
-        c.then_with(|| c1.args.cmp(&c2.args))
-            .then_with(|| compare_message_chain_content(&c1.message_chain, &c2.message_chain))
+        c.then_with(|| c1.args.cmp(&c2.args)).then_with(|| compare_message_chain_content(&c1.message_chain, &c2.message_chain))
     })
 }
 
@@ -276,8 +262,7 @@ fn compare_diagnostics(d1: &Diagnostic, d2: &Diagnostic) -> Ordering {
 
 /// `EqualDiagnosticsNoRelatedInfo`
 fn equal_without_related(d1: &Diagnostic, d2: &Diagnostic) -> bool {
-    (d1.path, d1.start, d1.end, d1.code, &d1.args) == (d2.path, d2.start, d2.end, d2.code, &d2.args)
-        && d1.message_chain == d2.message_chain
+    (d1.path, d1.start, d1.end, d1.code, &d1.args) == (d2.path, d2.start, d2.end, d2.code, &d2.args) && d1.message_chain == d2.message_chain
 }
 
 /// `EqualDiagnostics` of related information.
@@ -304,13 +289,7 @@ fn sort_and_deduplicate(diagnostics: &mut Vec<Diagnostic>) {
 /// One diagnostic in the shape of breaka-rpg's `TypeScriptRuntimeDiagnostic`: `pos` and `end` in UTF-16 code units,
 /// positions with lines and characters from 0, the message with its chain as TypeScript prints it (each level of the
 /// chain on its own line, indented by two spaces a level).
-fn write_diagnostic(
-    out: &mut String,
-    at: Option<(&[u8], &Positions, u32, u32)>,
-    code: u32,
-    kind: Category,
-    text: &[u8],
-) {
+fn write_diagnostic(out: &mut String, at: Option<(&[u8], &Positions, u32, u32)>, code: u32, kind: Category, text: &[u8]) {
     if let Some((name, positions, start, end)) = at {
         let (pos, line, character) = positions.of(start);
         let (end, end_line, end_character) = positions.of(end);
@@ -336,7 +315,13 @@ fn texts(errors: impl Iterator<Item = (u32, Vec<Vec<u8>>)>) -> Vec<String> {
 ///
 /// The host writes the configuration and gives every file the program reaches, so an error in the configuration or in
 /// the program (a missing lib) is a defect of the host, and panics.
-pub(crate) fn load<'s>(session: &'s Session, host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8]) -> (&'s Program<'s>, bool, Rc<Shared>) {
+pub(crate) fn load<'s>(
+    session: &'s Session,
+    host: &MemoryHost,
+    runs: &mut Runs,
+    config: &[u8],
+    lib_dir: &[u8],
+) -> (&'s Program<'s>, bool, Rc<Shared>) {
     let mut project = match bun_sema::config::load_overriding(host, session, config, &|_| Vec::new()) {
         Ok(project) => project,
         Err(errors) => panic!("the configuration is unreadable: {:?}", texts(errors.into_iter().map(|e| (e.code, e.args)))),

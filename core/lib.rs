@@ -11,7 +11,7 @@ pub mod native;
 mod positions;
 pub mod protocol;
 mod service;
-mod services;
+pub mod services;
 mod symbols;
 mod transpile;
 #[cfg(target_family = "wasm")]

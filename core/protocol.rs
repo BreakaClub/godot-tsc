@@ -15,13 +15,35 @@ pub enum Request {
     /// Adds the file at `path` (absolute, in the checker's format: `/project/lab.tsx`) or replaces its text.
     SetFile(FileText),
     /// Several files at once (opening a project).
-    SetFiles { files: Vec<FileText> },
+    SetFiles {
+        files: Vec<FileText>,
+    },
     /// Removes the file at `path`, which must be there.
-    RemoveFile { path: String },
+    RemoveFile {
+        path: String,
+    },
     /// Checks the project whose configuration file is at `config`, with the lib files in `lib_dir`.
-    Check { config: String, lib_dir: String },
+    Check {
+        config: String,
+        lib_dir: String,
+    },
     /// What is under `offset` (UTF-16) in the file at `path`: the name and the type (`services::hover`).
-    Hover { config: String, lib_dir: String, path: String, offset: usize },
+    Hover {
+        config: String,
+        lib_dir: String,
+        path: String,
+        offset: usize,
+    },
+    /// The inlay hints between UTF-16 offsets `from` and `to` of the file at `path` (`services::inlay_hints`).
+    InlayHints {
+        config: String,
+        lib_dir: String,
+        path: String,
+        from: usize,
+        to: usize,
+        #[serde(default = "default_parameter_names")]
+        parameter_names: crate::services::ParameterNames,
+    },
 }
 
 /// A file of the checker's project: an absolute path and the text.
@@ -107,4 +129,8 @@ pub struct Diagnostic {
     pub character: usize,
     pub severity: Severity,
     pub message: String,
+}
+
+fn default_parameter_names() -> crate::services::ParameterNames {
+    crate::services::ParameterNames::Literals
 }

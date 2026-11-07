@@ -18,9 +18,7 @@
 use crate::protocol::{Diagnostic, Severity};
 use bun_alloc::Arena;
 use bun_ast::symbol::{Kind as SymbolKind, Symbol};
-use bun_ast::{
-    Ast, B, Binding, E, Expr, G, ImportRecordFlags, Loc, PartTag, Ref, S, Stmt, StmtData, StmtOrExpr, StoreSlice, StoreStr,
-};
+use bun_ast::{Ast, B, Binding, E, Expr, G, ImportRecordFlags, Loc, PartTag, Ref, S, Stmt, StmtData, StmtOrExpr, StoreSlice, StoreStr};
 use bun_collections::VecExt;
 use std::collections::HashSet;
 
@@ -569,9 +567,8 @@ impl<'x, 'a> Lowerer<'x, 'a> {
         for namespace in namespaces {
             let key = self.fresh_symbol(b"key", SymbolKind::Other);
             let key_binding = Binding::alloc(self.arena, B::Identifier { r#ref: key }, Loc::EMPTY);
-            let not_equal = |name: &[u8]| {
-                Expr::init(E::Binary { op: bun_ast::OpCode::BinStrictNe, left: ident(key), right: string(name) }, Loc::EMPTY)
-            };
+            let not_equal =
+                |name: &[u8]| Expr::init(E::Binary { op: bun_ast::OpCode::BinStrictNe, left: ident(key), right: string(name) }, Loc::EMPTY);
             let has_own = call(
                 dot(dot(dot(ident(self.object_ref()), b"prototype"), b"hasOwnProperty"), b"call"),
                 &[ident(self.ast.exports_ref), ident(key)],
