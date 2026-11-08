@@ -1,23 +1,28 @@
 //! `LiveCompile`: Bun's TypeScript checker and JavaScript compiler (`live_compile_core`) as a Godot class.
 //!
 //! Threading. The extension is a main-thread one, as `godot_react_ui` is: no Godot API is used anywhere but the thread
-//! GodotJS calls from. The library runs on a plain Rust thread of its own that touches no Godot API and talks in strings.
-//! A request is queued and answered later (`request_check` returns an id, `poll` hands over the finished replies), except
-//! `compile`, which waits for its answer: a transpile takes milliseconds, and the caller hands over the text.
+//! GodotJS calls from. The library runs on a plain Rust thread of its own that touches no Godot API and talks in strings
+//! (`queue.rs`).
+//!
+//! **No call waits for that thread.** A request (`request_compile`, `request_check`, `request_query`, `request_ping`) is queued
+//! and returns an id at once, and `poll` hands over the finished replies, which carry their id; `cancel` takes a request back.
+//! The caller is the engine's main thread, and on the Web the page's: a browser starts a pthread only when the page's thread
+//! returns to its event loop, so a call that waited for the service thread would stall the page for as long as it takes the
+//! thread to start (docs/tracks/live-compile-async.md has the evidence), and would never be answered if the page waited in
+//! the turn that asked for the thread. The calls that remain synchronous are the ones that only move a value under a lock
+//! that is never held while a request runs: `start`, `stop`, `set_file`, `set_files`, `remove_file`, `request_*`, `cancel`,
+//! `poll` and `state`.
 //!
 //! The service is single flight: it runs one request at a time, in the order they were made, and a check that has not begun
 //! when a newer one is made is dropped and answered as superseded. Nothing runs while nothing is asked: the thread waits on
 //! a condition variable, and the caller asks for frames (or a timer) only while a request is outstanding.
 
+mod queue;
+
 use godot::prelude::*;
-use live_compile_core::Service;
 use live_compile_core::protocol::{FileText, Request, TranspileRequest};
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use queue::{Job, Kind, Worker, answer};
+use std::time::Duration;
 
 struct LiveCompileExtension;
 
@@ -32,203 +37,6 @@ unsafe impl ExtensionLibrary for LiveCompileExtension {}
 const SERVICE_STACK_BYTES: usize = 64 << 20;
 #[cfg(target_os = "emscripten")]
 const SERVICE_STACK_BYTES: usize = 8 << 20;
-/// How long a call that waits (`compile`, `ping`) waits for the service thread before it says so. A wait is bounded because a thread
-/// that never runs (in a browser, a pthread that the page has no worker for) must be an error, not a page that hangs.
-const CALL_DEADLINE: Duration = Duration::from_secs(30);
-const MILLISECONDS_PER_SECOND: f64 = 1000.0;
-/// What the stack budget leaves for the frames above a request and for the guard page.
-const STACK_RESERVE_BYTES: usize = 256 << 10;
-
-/// TEMPORARY DIAGNOSTICS (docs/tracks/live-compile-async.md): an event log of the service pipeline, kept to find out why a call was not
-/// answered. Times are milliseconds since the Unix epoch from the thread that logs them, so the page's `Date.now()` and the service thread's
-/// clock can be compared. Removed with the blocking call it was written to explain.
-mod trace {
-    use super::*;
-
-    const EVENT_LIMIT: usize = 4000;
-    static EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    pub static THREADS_SPAWNED: AtomicI64 = AtomicI64::new(0);
-    pub static THREADS_ALIVE: AtomicI64 = AtomicI64::new(0);
-
-    pub fn now_ms() -> f64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |elapsed| elapsed.as_secs_f64() * MILLISECONDS_PER_SECOND)
-    }
-
-    pub fn event(kind: &str, detail: &str) {
-        let mut events = EVENTS.lock().expect("the trace is not poisoned");
-        if events.len() < EVENT_LIMIT {
-            events.push(format!("{{\"at\":{:.1},\"event\":\"{kind}\"{}}}", now_ms(), if detail.is_empty() { String::new() } else { format!(",{detail}") }));
-        }
-    }
-
-    pub fn snapshot() -> String {
-        let events = EVENTS.lock().expect("the trace is not poisoned");
-        format!(
-            "{{\"now\":{:.1},\"spawned\":{},\"alive\":{},\"events\":[{}]}}",
-            now_ms(),
-            THREADS_SPAWNED.load(Ordering::SeqCst),
-            THREADS_ALIVE.load(Ordering::SeqCst),
-            events.join(",")
-        )
-    }
-}
-
-/// What the thread is asked to do, in order.
-enum Job {
-    /// A change to the project: nothing is answered.
-    Project(Request),
-    /// A check, answered through `poll`; dropped if a newer check is made before it starts.
-    Check { id: i64, config: String, lib_dir: String },
-    /// An editor-services request (hover, inlay hints), answered through `poll` as `{"id":n,"kind":"query","result":{...}}`.
-    Query { id: i64, request: Request },
-    /// A request whose caller waits for the answer (a transpile, a ping).
-    Call { request: Request, reply: Sender<String> },
-}
-
-impl Job {
-    fn describe(&self) -> String {
-        match self {
-            Job::Project(_) => "\"kind\":\"project\"".to_string(),
-            Job::Check { id, .. } => format!("\"kind\":\"check\",\"id\":{id}"),
-            Job::Query { id, .. } => format!("\"kind\":\"query\",\"id\":{id}"),
-            Job::Call { .. } => "\"kind\":\"call\"".to_string(),
-        }
-    }
-}
-
-#[derive(Default)]
-struct Queue {
-    jobs: VecDeque<Job>,
-    shutdown: bool,
-}
-
-/// A finished request, as `poll` hands it over: `{"id":n,"kind":"check","result":{...}}`, or `"superseded":true` in place of
-/// the result for a check that was dropped.
-struct Reply(String);
-
-struct Shared {
-    queue: Mutex<Queue>,
-    wake: Condvar,
-    replies: Mutex<VecDeque<Reply>>,
-}
-
-impl Shared {
-    fn lock_queue(&self) -> MutexGuard<'_, Queue> {
-        self.queue.lock().expect("a thread that held the queue did not panic: requests are run under catch_unwind")
-    }
-
-    fn lock_replies(&self) -> MutexGuard<'_, VecDeque<Reply>> {
-        self.replies.lock().expect("a thread that held the replies did not panic")
-    }
-
-    fn push(&self, job: Job) {
-        let mut queue = self.lock_queue();
-        trace::event("push", &format!("{},\"queued\":{}", job.describe(), queue.jobs.len()));
-        if let Job::Check { id, .. } = &job {
-            // A check that has not begun is replaced by this one; its asker is told.
-            let dropped: Vec<i64> =
-                queue.jobs.iter().filter_map(|queued| if let Job::Check { id, .. } = queued { Some(*id) } else { None }).collect();
-            queue.jobs.retain(|queued| !matches!(queued, Job::Check { .. }));
-            let mut replies = self.lock_replies();
-            for superseded in dropped {
-                replies.push_back(Reply(format!("{{\"id\":{superseded},\"kind\":\"check\",\"superseded\":true,\"by\":{id}}}")));
-            }
-        }
-        queue.jobs.push_back(job);
-        self.wake.notify_one();
-    }
-
-    fn next(&self) -> Option<Job> {
-        let mut queue = self.lock_queue();
-        loop {
-            if let Some(job) = queue.jobs.pop_front() {
-                return Some(job);
-            }
-            if queue.shutdown {
-                return None;
-            }
-            queue = self.wake.wait(queue).expect("the queue's lock is not poisoned");
-        }
-    }
-}
-
-/// The thread's loop: one `Service`, made here because it is not `Send`.
-fn serve(shared: &Shared) {
-    trace::THREADS_ALIVE.fetch_add(1, Ordering::SeqCst);
-    trace::event("thread-run", &format!("\"alive\":{}", trace::THREADS_ALIVE.load(Ordering::SeqCst)));
-    live_compile_core::native::set_stack_size(SERVICE_STACK_BYTES - STACK_RESERVE_BYTES);
-    let mut service = Service::new();
-    while let Some(job) = shared.next() {
-        let described = job.describe();
-        trace::event("begin", &described);
-        let _end = EndOfJob(described);
-        match job {
-            Job::Project(request) => {
-                // A project change has no reply; a failure of one (a file removed that was never there) shows in the next check.
-                let _ = service.handle(request);
-            }
-            Job::Check { id, config, lib_dir } => {
-                let started = Instant::now();
-                let result = service.handle(Request::Check { config, lib_dir });
-                let ms = started.elapsed().as_secs_f64() * MILLISECONDS_PER_SECOND;
-                shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"check\",\"ms\":{ms:.3},\"result\":{result}}}")));
-            }
-            Job::Query { id, request } => {
-                let started = Instant::now();
-                let result = service.handle(request);
-                let ms = started.elapsed().as_secs_f64() * MILLISECONDS_PER_SECOND;
-                shared.lock_replies().push_back(Reply(format!("{{\"id\":{id},\"kind\":\"query\",\"ms\":{ms:.3},\"result\":{result}}}")));
-            }
-            Job::Call { request, reply } => {
-                // The caller may have gone: a send that fails is nobody's loss.
-                let _ = reply.send(service.handle(request));
-            }
-        }
-    }
-    trace::THREADS_ALIVE.fetch_sub(1, Ordering::SeqCst);
-    trace::event("thread-exit", &format!("\"alive\":{}", trace::THREADS_ALIVE.load(Ordering::SeqCst)));
-}
-
-/// Logs the end of a job when it goes out of scope.
-struct EndOfJob(String);
-
-impl Drop for EndOfJob {
-    fn drop(&mut self) {
-        trace::event("end", &self.0);
-    }
-}
-
-struct Worker {
-    shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl Worker {
-    fn start() -> Worker {
-        trace::THREADS_SPAWNED.fetch_add(1, Ordering::SeqCst);
-        trace::event("spawn", &format!("\"spawned\":{}", trace::THREADS_SPAWNED.load(Ordering::SeqCst)));
-        let shared = Arc::new(Shared { queue: Mutex::default(), wake: Condvar::new(), replies: Mutex::default() });
-        let for_thread = Arc::clone(&shared);
-        let thread = thread::Builder::new()
-            .name("live-compile".to_string())
-            .stack_size(SERVICE_STACK_BYTES)
-            .spawn(move || serve(&for_thread))
-            .expect("the operating system gives a thread");
-        trace::event("spawned", "");
-        Worker { shared, thread: Some(thread) }
-    }
-}
-
-impl Drop for Worker {
-    fn drop(&mut self) {
-        trace::event("worker-drop", "");
-        self.shared.lock_queue().shutdown = true;
-        self.shared.wake.notify_one();
-        // Not joined: the thread may be in the middle of a check, and the object going away must not wait for it. It
-        // finishes that request, finds the queue shut and ends.
-        drop(self.thread.take());
-    }
-}
 
 /// The checker and the compiler of one project.
 #[derive(GodotClass)]
@@ -241,26 +49,7 @@ struct LiveCompile {
 #[godot_api]
 impl LiveCompile {
     fn worker(&mut self) -> &Worker {
-        self.worker.get_or_insert_with(Worker::start)
-    }
-
-    /// Runs `request` on the service thread and waits for its answer.
-    fn call(&mut self, request: Request) -> GString {
-        let (reply, answer) = mpsc::channel();
-        trace::event("call-wait", "");
-        self.worker().shared.push(Job::Call { request, reply });
-        let reply = answer.recv_timeout(CALL_DEADLINE).map(|reply| {
-            trace::event("call-answered", "");
-            reply
-        });
-        let reply = reply.unwrap_or_else(|error| {
-            trace::event("call-timeout", "");
-            live_compile_core::failure(format!(
-                "the live-compile service thread did not answer: {error} (waited {} s)",
-                CALL_DEADLINE.as_secs()
-            ))
-        });
-        GString::from(&reply)
+        self.worker.get_or_insert_with(|| Worker::start(SERVICE_STACK_BYTES))
     }
 
     fn next_id(&mut self) -> i64 {
@@ -268,24 +57,31 @@ impl LiveCompile {
         self.next_id
     }
 
-    /// TEMPORARY DIAGNOSTICS: the trace of the service pipeline, as JSON. Process-wide, so any instance answers.
-    #[func]
-    fn diagnostics(&self) -> GString {
-        GString::from(&trace::snapshot())
+    /// Queues `request`, to be answered as a reply of `kind`, and returns its id.
+    fn ask(&mut self, kind: Kind, request: Request) -> i64 {
+        let id = self.next_id();
+        self.worker().shared.push(Job::Ask { id, kind, request });
+        id
     }
 
-    /// Starts the service thread now instead of at the first request. A browser starts a pthread from its pool of workers, and a page
-    /// that asks for the thread and waits for it in the same turn can wait for ever if the pool is empty (docs/WEB.md): the owner starts it
-    /// early, and the wait is bounded anyway.
+    /// Starts the service thread now instead of at the first request, so that a browser has begun its worker by the time the
+    /// first request is asked for. Nothing waits for it either way.
     #[func]
     fn start(&mut self) {
         self.worker();
     }
 
-    /// The library's name and the Bun revision it is made from, as JSON.
+    /// Ends the service thread, when it has finished the request it is in (an object going away does the same). Requests
+    /// still outstanding get no reply. A request made afterwards starts a thread again.
     #[func]
-    fn ping(&mut self) -> GString {
-        self.call(Request::Ping)
+    fn stop(&mut self) {
+        self.worker = None;
+    }
+
+    /// Asks the library its name and the Bun revision it is made from. Returns the id of the `ping` reply.
+    #[func]
+    fn request_ping(&mut self) -> i64 {
+        self.ask(Kind::Ping, Request::Ping)
     }
 
     /// Adds the file at `path` (absolute, in the checker's format: `/project/lab.tsx`) or replaces its text.
@@ -313,26 +109,27 @@ impl LiveCompile {
         self.worker().shared.push(Job::Project(Request::RemoveFile { path: path.to_string() }));
     }
 
-    /// Compiles TypeScript or JSX to JavaScript that is a function body (`require`, `exports`, `module`, `$RefreshReg$` and
-    /// `$RefreshSig$` are its free identifiers), as JSON; waits for the answer.
+    /// Starts compiling TypeScript or JSX to JavaScript that is a function body (`require`, `exports`, `module`, `$RefreshReg$` and
+    /// `$RefreshSig$` are its free identifiers). Returns the id of the `compile` reply, whose result is the compiler's JSON.
     #[func]
-    fn compile(&mut self, path: GString, source: GString, refresh: bool) -> GString {
-        self.call(Request::Transpile(TranspileRequest {
-            path: path.to_string(),
-            source: source.to_string(),
-            refresh,
-            source_map: false,
-            preserve_unused_imports: false,
-        }))
+    fn request_compile(&mut self, path: GString, source: GString, refresh: bool) -> i64 {
+        self.ask(
+            Kind::Compile,
+            Request::Transpile(TranspileRequest {
+                path: path.to_string(),
+                source: source.to_string(),
+                refresh,
+                source_map: false,
+                preserve_unused_imports: false,
+            }),
+        )
     }
 
     /// Starts a check of the project whose configuration is at `config`, with the lib files in `lib_dir`. Returns the id the
     /// reply carries. A check not begun when the next is made is dropped.
     #[func]
     fn request_check(&mut self, config: GString, lib_dir: GString) -> i64 {
-        let id = self.next_id();
-        self.worker().shared.push(Job::Check { id, config: config.to_string(), lib_dir: lib_dir.to_string() });
-        id
+        self.ask(Kind::Check, Request::Check { config: config.to_string(), lib_dir: lib_dir.to_string() })
     }
 
     /// Starts an editor-services request, given as JSON (`{"op":"hover",...}`, `{"op":"inlayHints",...}`: `live-compile/core/protocol.rs`).
@@ -340,18 +137,33 @@ impl LiveCompile {
     /// a failed result.
     #[func]
     fn request_query(&mut self, request_json: GString) -> i64 {
-        let id = self.next_id();
         match serde_json::from_str::<Request>(&request_json.to_string()) {
-            Ok(request) => self.worker().shared.push(Job::Query { id, request }),
+            Ok(request) => self.ask(Kind::Query, request),
             Err(error) => {
+                let id = self.next_id();
                 let failed = live_compile_core::failure(format!("invalid request: {error}"));
-                self.worker()
-                    .shared
-                    .lock_replies()
-                    .push_back(Reply(format!("{{\"id\":{id},\"kind\":\"query\",\"ms\":0,\"result\":{failed}}}")));
+                self.worker().shared.reply_now(answer(id, Kind::Query, 0.0, &failed));
+                id
             }
         }
+    }
+
+    /// A hook for tests: holds the service thread for `milliseconds`, as a long check would, so that what happens to the caller while
+    /// the service is busy can be tried. Returns the id of the `stall` reply.
+    #[func]
+    fn request_stall(&mut self, milliseconds: i64) -> i64 {
+        let id = self.next_id();
+        let duration = Duration::from_millis(u64::try_from(milliseconds).unwrap_or(0));
+        self.worker().shared.push(Job::Stall { id, duration });
         id
+    }
+
+    /// Takes the request `id` back. If it had not begun it never runs; if it is running it finishes and its reply is dropped. Either
+    /// way no reply for `id` is handed over by `poll` after this. False when nothing of it is left (it was answered and `poll` has handed
+    /// the answer over).
+    #[func]
+    fn cancel(&mut self, id: i64) -> bool {
+        self.worker.as_ref().is_some_and(|worker| worker.shared.cancel(id))
     }
 
     /// The oldest reply that is ready, as JSON, or an empty string. A caller with a request outstanding calls this until it
@@ -361,9 +173,27 @@ impl LiveCompile {
         let Some(worker) = self.worker.as_ref() else {
             return GString::new();
         };
-        match worker.shared.lock_replies().pop_front() {
-            Some(Reply(json)) => GString::from(&json),
-            None => GString::new(),
-        }
+        worker.shared.poll().map_or_else(GString::new, |json| GString::from(&json))
+    }
+
+    /// What the queue holds right now, as JSON, without asking the thread: `threadRunning` (the thread has begun and not ended),
+    /// `queued`, `running` (the id of the request being served, or null), `replies` (finished and not taken) and `threadsAlive`
+    /// (the service threads running in the whole process).
+    #[func]
+    fn state(&self) -> GString {
+        let threads_alive = queue::threads_alive();
+        let json = match self.worker.as_ref().map(|worker| worker.shared.state()) {
+            Some(state) => format!(
+                "{{\"started\":true,\"threadRunning\":{},\"queued\":{},\"running\":{},\"replies\":{},\"threadsAlive\":{threads_alive}}}",
+                state.thread_running,
+                state.queued,
+                state.running.map_or_else(|| "null".to_string(), |id| id.to_string()),
+                state.replies
+            ),
+            None => format!(
+                "{{\"started\":false,\"threadRunning\":false,\"queued\":0,\"running\":null,\"replies\":0,\"threadsAlive\":{threads_alive}}}"
+            ),
+        };
+        GString::from(&json)
     }
 }
