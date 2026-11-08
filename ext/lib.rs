@@ -13,10 +13,11 @@ use godot::prelude::*;
 use live_compile_core::Service;
 use live_compile_core::protocol::{FileText, Request, TranspileRequest};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 struct LiveCompileExtension;
 
@@ -38,6 +39,40 @@ const MILLISECONDS_PER_SECOND: f64 = 1000.0;
 /// What the stack budget leaves for the frames above a request and for the guard page.
 const STACK_RESERVE_BYTES: usize = 256 << 10;
 
+/// TEMPORARY DIAGNOSTICS (docs/tracks/live-compile-async.md): an event log of the service pipeline, kept to find out why a call was not
+/// answered. Times are milliseconds since the Unix epoch from the thread that logs them, so the page's `Date.now()` and the service thread's
+/// clock can be compared. Removed with the blocking call it was written to explain.
+mod trace {
+    use super::*;
+
+    const EVENT_LIMIT: usize = 4000;
+    static EVENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    pub static THREADS_SPAWNED: AtomicI64 = AtomicI64::new(0);
+    pub static THREADS_ALIVE: AtomicI64 = AtomicI64::new(0);
+
+    pub fn now_ms() -> f64 {
+        SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |elapsed| elapsed.as_secs_f64() * MILLISECONDS_PER_SECOND)
+    }
+
+    pub fn event(kind: &str, detail: &str) {
+        let mut events = EVENTS.lock().expect("the trace is not poisoned");
+        if events.len() < EVENT_LIMIT {
+            events.push(format!("{{\"at\":{:.1},\"event\":\"{kind}\"{}}}", now_ms(), if detail.is_empty() { String::new() } else { format!(",{detail}") }));
+        }
+    }
+
+    pub fn snapshot() -> String {
+        let events = EVENTS.lock().expect("the trace is not poisoned");
+        format!(
+            "{{\"now\":{:.1},\"spawned\":{},\"alive\":{},\"events\":[{}]}}",
+            now_ms(),
+            THREADS_SPAWNED.load(Ordering::SeqCst),
+            THREADS_ALIVE.load(Ordering::SeqCst),
+            events.join(",")
+        )
+    }
+}
+
 /// What the thread is asked to do, in order.
 enum Job {
     /// A change to the project: nothing is answered.
@@ -48,6 +83,17 @@ enum Job {
     Query { id: i64, request: Request },
     /// A request whose caller waits for the answer (a transpile, a ping).
     Call { request: Request, reply: Sender<String> },
+}
+
+impl Job {
+    fn describe(&self) -> String {
+        match self {
+            Job::Project(_) => "\"kind\":\"project\"".to_string(),
+            Job::Check { id, .. } => format!("\"kind\":\"check\",\"id\":{id}"),
+            Job::Query { id, .. } => format!("\"kind\":\"query\",\"id\":{id}"),
+            Job::Call { .. } => "\"kind\":\"call\"".to_string(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -77,6 +123,7 @@ impl Shared {
 
     fn push(&self, job: Job) {
         let mut queue = self.lock_queue();
+        trace::event("push", &format!("{},\"queued\":{}", job.describe(), queue.jobs.len()));
         if let Job::Check { id, .. } = &job {
             // A check that has not begun is replaced by this one; its asker is told.
             let dropped: Vec<i64> =
@@ -107,9 +154,14 @@ impl Shared {
 
 /// The thread's loop: one `Service`, made here because it is not `Send`.
 fn serve(shared: &Shared) {
+    trace::THREADS_ALIVE.fetch_add(1, Ordering::SeqCst);
+    trace::event("thread-run", &format!("\"alive\":{}", trace::THREADS_ALIVE.load(Ordering::SeqCst)));
     live_compile_core::native::set_stack_size(SERVICE_STACK_BYTES - STACK_RESERVE_BYTES);
     let mut service = Service::new();
     while let Some(job) = shared.next() {
+        let described = job.describe();
+        trace::event("begin", &described);
+        let _end = EndOfJob(described);
         match job {
             Job::Project(request) => {
                 // A project change has no reply; a failure of one (a file removed that was never there) shows in the next check.
@@ -133,6 +185,17 @@ fn serve(shared: &Shared) {
             }
         }
     }
+    trace::THREADS_ALIVE.fetch_sub(1, Ordering::SeqCst);
+    trace::event("thread-exit", &format!("\"alive\":{}", trace::THREADS_ALIVE.load(Ordering::SeqCst)));
+}
+
+/// Logs the end of a job when it goes out of scope.
+struct EndOfJob(String);
+
+impl Drop for EndOfJob {
+    fn drop(&mut self) {
+        trace::event("end", &self.0);
+    }
 }
 
 struct Worker {
@@ -142,6 +205,8 @@ struct Worker {
 
 impl Worker {
     fn start() -> Worker {
+        trace::THREADS_SPAWNED.fetch_add(1, Ordering::SeqCst);
+        trace::event("spawn", &format!("\"spawned\":{}", trace::THREADS_SPAWNED.load(Ordering::SeqCst)));
         let shared = Arc::new(Shared { queue: Mutex::default(), wake: Condvar::new(), replies: Mutex::default() });
         let for_thread = Arc::clone(&shared);
         let thread = thread::Builder::new()
@@ -149,12 +214,14 @@ impl Worker {
             .stack_size(SERVICE_STACK_BYTES)
             .spawn(move || serve(&for_thread))
             .expect("the operating system gives a thread");
+        trace::event("spawned", "");
         Worker { shared, thread: Some(thread) }
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
+        trace::event("worker-drop", "");
         self.shared.lock_queue().shutdown = true;
         self.shared.wake.notify_one();
         // Not joined: the thread may be in the middle of a check, and the object going away must not wait for it. It
@@ -180,8 +247,14 @@ impl LiveCompile {
     /// Runs `request` on the service thread and waits for its answer.
     fn call(&mut self, request: Request) -> GString {
         let (reply, answer) = mpsc::channel();
+        trace::event("call-wait", "");
         self.worker().shared.push(Job::Call { request, reply });
-        let reply = answer.recv_timeout(CALL_DEADLINE).unwrap_or_else(|error| {
+        let reply = answer.recv_timeout(CALL_DEADLINE).map(|reply| {
+            trace::event("call-answered", "");
+            reply
+        });
+        let reply = reply.unwrap_or_else(|error| {
+            trace::event("call-timeout", "");
             live_compile_core::failure(format!(
                 "the live-compile service thread did not answer: {error} (waited {} s)",
                 CALL_DEADLINE.as_secs()
@@ -193,6 +266,12 @@ impl LiveCompile {
     fn next_id(&mut self) -> i64 {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// TEMPORARY DIAGNOSTICS: the trace of the service pipeline, as JSON. Process-wide, so any instance answers.
+    #[func]
+    fn diagnostics(&self) -> GString {
+        GString::from(&trace::snapshot())
     }
 
     /// Starts the service thread now instead of at the first request. A browser starts a pthread from its pool of workers, and a page
