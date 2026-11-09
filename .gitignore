@@ -4,6 +4,7 @@ vendor/
 target/
 out/
 addon/
+libs/
 dist/
 release/
 node_modules/

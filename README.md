@@ -71,8 +71,9 @@ tsc.close();
   `RequestCancelled`, so an answer that was given up is never delivered.
 - **The lib files are yours to supply.** `libDir` is a directory of the in-memory files holding TypeScript's `lib.*.d.ts`; a check
   of a program without them fails. The `typescript` package's `lib/` files work (5.9.3's were checked: `lib.es2022.d.ts`, the
-  decorators and what they reference, 57 files). Bun's own bundle of TypeScript 7.0.2's is `vendor/bun/typescript_libs.bin`
-  (zstd with dictionaries; godot-react-ui's demo reads it). Packages resolve through `paths`; there is no `node_modules` lookup.
+  decorators and what they reference, 57 files). Bun's own bundle of TypeScript 7.0.2's ships with the package as
+  `godot-tsc/typescript_libs.bin` (`require.resolve('godot-tsc/typescript_libs.bin')`; zstd with dictionaries, which `node:zlib`
+  reads from Node 24; godot-react-ui's demo reads it). Packages resolve through `paths`; there is no `node_modules` lookup.
 - **Typings.** `godot-tsc` declares the `GodotTsc` class into the `godot` module, so it needs a GodotJS project's own typings for
   `godot`. `Tsc` takes any `TscLink`, which is how `tests/tsc.test.ts` drives it without Godot, and `TscHost` is the interface
   a stand-in implements.
@@ -88,11 +89,12 @@ replies are JSON (`core/protocol.rs`; validated on the TypeScript side by `src/p
 | --- | --- | --- |
 | macOS arm64 | `libgodot_tsc.dylib` | Bound to the Godot 4.7.2 API (`api/godot-4.7.2`), so it loads in 4.7.2 and newer, including Breaka's 4.8. |
 | Web, stock Godot 4.7 templates | `godot_tsc.web.stock.wasm` | Emscripten 4.0.11 side module. The shipped manifest names this one. |
-| Web, Breaka's Godot 4.8 templates | `godot_tsc.web.breaka.wasm` | Emscripten 6.0.12 with Breaka's lazy function-table ABI; built locally only (below). |
+| Web, Breaka's Godot 4.8 templates | `godot_tsc.web.breaka.wasm` | Emscripten 6.0.12 with Breaka's lazy function-table ABI. Shipped when built locally (below); CI does not build it. |
 
 A Web side module must be linked with the Emscripten of the engine whose templates load it; one linked for the other engine
 kills the page at load. A manifest can name one module for `web.*.threads.wasm32`, so `stage-addon.mjs --web-profile=breaka`
-stages an addon for Breaka's templates instead. Linux and Windows are not built yet. GodotJS's native V8 has no
+stages an addon for Breaka's templates instead. `addon/godot-tsc/build.json` records each binary's SHA-256 and the Godot API dumps
+it is bound to (natively and per Web module), so a project can check what it installed. Linux and Windows are not built yet. GodotJS's native V8 has no
 WebAssembly, which is why the native side is a GDExtension and not a wasm checker.
 
 ## Build from source

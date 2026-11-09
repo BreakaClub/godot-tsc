@@ -6,6 +6,9 @@
 //   addon/godot-tsc/bin/                    the binaries
 //   addon/godot-tsc/build.json              each binary's SHA-256, the package version and the commit it was staged at
 //   addon/godot-tsc/.version                the package version (bin/cli.mjs compares it before reinstalling)
+//   libs/typescript_libs.bin                Bun's bundle of TypeScript's lib.*.d.ts (vendor/bun), for a project's libDir (README.md)
+//
+// build.json also records what each binary is bound to: the Godot API dumps' SHA-256 (natively, and per Web profile) and the Bun revision.
 //
 // A Web manifest names one side module for `web.*.threads.wasm32`, so it can serve one profile's templates: a module linked for another engine's
 // Emscripten kills the page at load (scripts/godot-api.mjs). Both profiles' modules may be staged; the manifest names the one `--web-profile` picks.
@@ -14,7 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { NATIVE_LIBRARIES, OUT_BIN, parseArguments, root, WEB_PROFILES } from './godot-api.mjs';
+import { NATIVE_API, NATIVE_LIBRARIES, OUT_BIN, parseArguments, root, WEB_PROFILES } from './godot-api.mjs';
 
 const ADDON_NAME = 'godot-tsc';
 const MANIFEST_NAME = 'godot_tsc.gdextension';
@@ -75,11 +78,24 @@ reloadable = false
 [libraries]
 ${lines.join('\n')}
 `);
+const sha256 = path => createHash('sha256').update(readFileSync(path)).digest('hex');
+const binding = api => ({ extensionApiSha256: sha256(api.extensionApi), gdextensionInterfaceSha256: sha256(api.gdextensionInterface) });
+const bunRevision = /^REVISION = "([0-9a-f]{40})"$/mu.exec(readFileSync(resolve(root, 'scripts/vendor-bun.py'), 'utf8'))?.[1] ?? null;
+const webModules = Object.fromEntries(Object.values(WEB_PROFILES).filter(profile => staged.includes(profile.library))
+  .map(profile => [profile.library, { profile: profile.name, binding: binding(profile) }]));
+
+// Bun's lib bundle, beside the addon (not in it: Godot has no use for it).
+const libBundle = resolve(root, 'vendor/bun/typescript_libs.bin');
+if (!existsSync(libBundle)) throw new Error(`${libBundle} is missing: run \`pnpm vendor\`.`);
+mkdirSync(resolve(root, 'libs'), { recursive: true });
+copyFileSync(libBundle, resolve(root, 'libs/typescript_libs.bin'));
+
 const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
 const dirty = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: root, encoding: 'utf8' });
 writeFileSync(join(destination, 'build.json'), `${JSON.stringify({
   version: pkg.version, commit: head.status === 0 ? head.stdout.trim() : null, dirty: dirty.status === 0 ? dirty.stdout.trim() !== '' : null,
-  webProfile: existsSync(join(OUT_BIN, webProfile.library)) ? webProfile.name : null, binaries: hashes,
+  webProfile: existsSync(join(OUT_BIN, webProfile.library)) ? webProfile.name : null, bunRevision,
+  nativeApi: { version: NATIVE_API.version, ...binding(NATIVE_API) }, webModules, binaries: hashes,
 }, null, 2)}\n`);
 writeFileSync(join(destination, '.version'), pkg.version);
 console.log(`[stage-addon] Staged ${ADDON_NAME} v${pkg.version} with ${staged.length} binary file(s) (${staged.join(', ') || 'none'}) into ${destination}`);

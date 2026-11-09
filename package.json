@@ -18,11 +18,14 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json",
+    "./typescript_libs.bin": "./libs/typescript_libs.bin"
   },
   "files": [
     "dist",
     "addon",
+    "libs",
     "bin",
     "README.md",
     "LICENSE"
