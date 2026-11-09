@@ -164,9 +164,15 @@ impl<'x, 'a> Lowerer<'x, 'a> {
         Ref::init(inner_index, self.source_index, false)
     }
 
-    /// A module-level binding named like a free identifier of the pass would be read in its place.
+    /// A module-level binding named like a free identifier of the pass would be read in its place. A name the module only reads is a member
+    /// of the module scope too: the parser puts a name nothing declares there, as a symbol of kind `Unbound` at its first use
+    /// (`P::find_symbol`). That is the global itself (`Object.entries(...)` reads the global `Object`), which is what the pass reads, so it
+    /// is no collision.
     fn check_free_names(&self) -> Result<(), Diagnostic> {
         for (name, member) in self.ast.module_scope.members.iter() {
+            if self.is_unbound(member.ref_) {
+                continue;
+            }
             // `exports`, `module` and `require` are declared by the parser in every file, at no position.
             if member.loc.start >= 0 && FREE_NAMES.contains(&name) {
                 let position = member.loc.start as usize;
@@ -522,12 +528,31 @@ impl<'x, 'a> Lowerer<'x, 'a> {
         Stmt::alloc(S::SExpr { value: Expr::assign(target, value), does_not_affect_tree_shaking: false }, stmt.loc)
     }
 
+    fn is_unbound(&self, ref_: Ref) -> bool {
+        self.ast.symbols.as_slice()[ref_.inner_index() as usize].kind == SymbolKind::Unbound
+    }
+
+    /// The global `Object`, which must print as `Object`: a fresh symbol would be renamed `Object2` in a module that reads the global itself,
+    /// and `Object2` is nothing at run time. The module's own unbound `Object` is the global when it has one; otherwise a symbol of that exact
+    /// name. `check_free_names` has refused a module-level binding of the name, and a binding in an inner scope cannot shadow the module-level
+    /// statements the pass writes.
     fn object_ref(&mut self) -> Ref {
         if let Some(object) = self.object {
             return object;
         }
-        // The global `Object`: a symbol nothing declares, which prints as its name.
-        let object = self.fresh_symbol(b"Object", SymbolKind::Unbound);
+        let read = self
+            .ast
+            .module_scope
+            .members
+            .iter()
+            .find(|(name, member)| *name == b"Object" && self.is_unbound(member.ref_))
+            .map(|(_, member)| member.ref_);
+        let object = read.unwrap_or_else(|| {
+            let name = StoreStr::new(self.arena.alloc_slice_copy(b"Object"));
+            let inner_index = u32::try_from(self.ast.symbols.len()).expect("a file has fewer than 2^32 symbols");
+            self.ast.symbols.push(Symbol { kind: SymbolKind::Unbound, original_name: name, ..Default::default() });
+            Ref::init(inner_index, self.source_index, false)
+        });
         self.object = Some(object);
         object
     }
