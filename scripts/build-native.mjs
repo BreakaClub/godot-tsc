@@ -7,20 +7,20 @@
 // Bun's crates are extracted into vendor/ first when they are not there (scripts/vendor.mjs). The toolchain is rust-toolchain.toml's nightly.
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { bindingEnvironment, NATIVE_API, NATIVE_LIBRARIES, OUT_BIN, parseArguments, root } from './godot-api.mjs';
+import { bindingEnvironment, NATIVE_API, NATIVE_LIBRARIES, OUT_BIN, parseArguments, root, rustToolchain, withToolchainPath } from './godot-api.mjs';
 import { vendor } from './vendor.mjs';
 
 const args = parseArguments(process.argv.slice(2), { flags: ['--cli'], values: ['--target'] });
 const target = args.values['--target'];
-const cargo = process.env.CARGO ?? resolve(homedir(), '.cargo/bin/cargo');
+const toolchain = rustToolchain();
+const cargo = toolchain.cargo;
 const platform = target === undefined
   ? { darwin: 'macos', linux: 'linux', win32: 'windows' }[process.platform]
   : target.includes('apple-darwin') ? 'macos' : target.includes('linux') ? 'linux' : target.includes('windows') ? 'windows' : undefined;
 if (platform === undefined) throw new Error(`No Godot platform for ${target ?? process.platform}`);
 const library = NATIVE_LIBRARIES[platform];
-const env = { ...process.env, ...bindingEnvironment(NATIVE_API), PATH: `${resolve(homedir(), '.cargo/bin')}:${process.env.PATH ?? ''}` };
+const env = withToolchainPath(toolchain, { ...process.env, ...bindingEnvironment(NATIVE_API) });
 
 function run(command, commandArgs) {
   const result = spawnSync(command, commandArgs, { cwd: root, stdio: 'inherit', env });

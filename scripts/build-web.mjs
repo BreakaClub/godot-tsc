@@ -11,9 +11,8 @@
 // cargo profile), which leaves it no landing pads for either kind of exception handling, so it needs none of Emscripten's.
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
-import { bindingEnvironment, OUT_BIN, parseArguments, root, WEB_PROFILES } from './godot-api.mjs';
+import { join, resolve } from 'node:path';
+import { bindingEnvironment, OUT_BIN, parseArguments, root, rustToolchain, WEB_PROFILES, withToolchainPath } from './godot-api.mjs';
 import { vendor } from './vendor.mjs';
 
 const args = parseArguments(process.argv.slice(2), { values: ['--profile'] });
@@ -29,14 +28,13 @@ function required(name) {
 }
 
 const sdk = required('EMSDK');
-const cargo = process.env.CARGO ?? resolve(homedir(), '.cargo/bin/cargo');
+const toolchain = rustToolchain();
+const cargo = toolchain.cargo;
 const targetDirectory = resolve(root, 'target', `web-${profile.name}`);
 // The SDK's own Node, whichever version it ships, for emcc.
 const sdkNode = existsSync(join(sdk, 'node')) ? readdirSync(join(sdk, 'node')).map(name => join(sdk, 'node', name, 'bin')).filter(existsSync) : [];
 const env = {
-  ...process.env,
-  ...bindingEnvironment(profile),
-  PATH: [dirname(cargo), join(sdk, 'upstream', 'emscripten'), ...sdkNode, process.env.PATH ?? ''].join(delimiter),
+  ...withToolchainPath(toolchain, { ...process.env, ...bindingEnvironment(profile) }, join(sdk, 'upstream', 'emscripten'), ...sdkNode),
   EM_CONFIG: process.env.EM_CONFIG ?? join(sdk, '.emscripten'),
   CARGO_TARGET_DIR: targetDirectory,
 };

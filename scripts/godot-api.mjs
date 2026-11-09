@@ -7,7 +7,9 @@
 // the page at load. So the Web build is per profile, each with its own file name:
 //   stock   stock Godot 4.7 Web templates (Emscripten 4.0.11), bound to the 4.7.2 dumps. This is the module the shipped manifest names.
 //   breaka  Breaka's Godot 4.8 Web templates (Emscripten 6.0.12 with Breaka's lazy function-table ABI), bound to Breaka's 4.8 dumps (api/breaka-4.8).
-import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { delimiter, dirname, join, resolve } from 'node:path';
 
 export const root = resolve(import.meta.dirname, '..');
 export const NATIVE_API = Object.freeze({
@@ -54,4 +56,32 @@ export function parseArguments(argv, { flags = [], values = [] }) {
     else throw new Error(`Unknown argument ${argument}. Takes ${[...flags, ...values.map(name => `${name}=<value>`)].join(', ') || 'none'}.`);
   }
   return result;
+}
+
+/**
+ * The cargo of the toolchain rust-toolchain.toml names, and its `bin` directory, which the build scripts put first on PATH so that cargo
+ * runs that toolchain's rustc and never another on PATH (Homebrew's rustc aborts here). rustup is asked (`rustup which cargo`): it knows
+ * where its toolchains are, which is not always ~/.cargo/bin (GitHub's macOS runners have rustup on PATH and nothing there). `CARGO`
+ * names a cargo to use instead.
+ */
+export function rustToolchain() {
+  if (process.env.CARGO) return { cargo: process.env.CARGO, bin: dirname(process.env.CARGO) };
+  const tried = [];
+  for (const rustup of ['rustup', join(homedir(), '.cargo/bin/rustup')]) {
+    const result = spawnSync(rustup, ['which', 'cargo'], { cwd: root, encoding: 'utf8' });
+    if (result.error?.code === 'ENOENT') {
+      tried.push(rustup);
+      continue;
+    }
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`${rustup} which cargo failed (${result.status}): ${result.stderr.trim()}`);
+    const cargo = result.stdout.trim();
+    return { cargo, bin: dirname(cargo) };
+  }
+  throw new Error(`No rustup (tried ${tried.join(', ')}): install rustup, or set CARGO to a cargo of the toolchain in rust-toolchain.toml`);
+}
+
+/** `env` with the toolchain's `bin` first on PATH. */
+export function withToolchainPath(toolchain, env, ...more) {
+  return { ...env, PATH: [toolchain.bin, ...more, env.PATH ?? ''].join(delimiter) };
 }
