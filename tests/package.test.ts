@@ -69,3 +69,36 @@ test('the godot-tsc entry needs the godot module, and shares the host module rat
     rmSync(join(consumer, 'node_modules', 'godot'), { recursive: true, force: true });
   }
 });
+
+// TypeScript resolves the package's types the way each consumer's `moduleResolution` does: `node` (node10) ignores the exports map, so
+// `godot-tsc/host` reaches its declarations through `typesVersions`; `node16` and `bundler` read the exports map.
+for (const [moduleResolution, module] of [['node', 'commonjs'], ['node16', 'node16'], ['bundler', 'esnext']] as const) {
+  test(`TypeScript finds both entries' types under moduleResolution ${moduleResolution}`, () => {
+    const project = join(consumer, `types-${moduleResolution}`);
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: { module, moduleResolution, target: 'es2022', strict: true, noEmit: true, skipLibCheck: true, types: [] },
+      files: ['probe.ts', 'godot.d.ts'],
+    }));
+    // The main entry's declarations name the engine's module: a stand-in for what a GodotJS project's typings declare.
+    writeFileSync(join(project, 'godot.d.ts'), `declare module 'godot' {
+  export class RefCounted {}
+  export class PackedStringArray { constructor(items?: string[]); }
+  export const ClassDB: { classExists(name: string): boolean };
+}
+`);
+    writeFileSync(join(project, 'probe.ts'), `import { RequestScope, Tsc, parseTranspileResult, type TranspileResult } from 'godot-tsc/host';
+import { openTsc, Tsc as MainTsc } from 'godot-tsc';
+const scope: RequestScope = new RequestScope();
+const parsed: TranspileResult = parseTranspileResult('{}');
+const same: typeof Tsc = MainTsc;
+const open: () => Tsc = openTsc;
+// A wrong use is an error, so the types are the package's and not \`any\`.
+// @ts-expect-error
+const wrong: string = scope;
+export { parsed, same, open, wrong };
+`);
+    const result = spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '-p', project], { cwd: project, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  });
+}

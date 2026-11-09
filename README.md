@@ -76,7 +76,8 @@ tsc.close();
   reads from Node 24; godot-react-ui's demo reads it). Packages resolve through `paths`; there is no `node_modules` lookup.
 - **Node.** `godot-tsc` imports the engine's `godot` module, so it loads only in GodotJS. `godot-tsc/host` is everything but `openTsc`, with no
   `godot` import: code that drives a `Tsc` (given any `TscLink`), cancels with `RequestScope` or parses replies can be loaded and tested under Node.
-  The two entries share one module, so a `RequestCancelled` from either is the same class.
+  The two entries share one module, so a `RequestCancelled` from either is the same class. Its types resolve under every `moduleResolution`,
+  `node` (node10) included, through `typesVersions`.
 - **Typings.** `godot-tsc` declares the `GodotTsc` class into the `godot` module, so it needs a GodotJS project's own typings for
   `godot`. `Tsc` takes any `TscLink`, which is how `tests/tsc.test.ts` drives it without Godot, and `TscHost` is the interface
   a stand-in implements.
