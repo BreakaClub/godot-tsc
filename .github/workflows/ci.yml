@@ -64,7 +64,7 @@ jobs:
       - name: Vendor Bun's crates
         run: pnpm vendor
 
-      - name: Build the extension and live-compile-cli
+      - name: Build the extension and godot-tsc-cli
         run: pnpm build:native --cli
 
       - name: Rust tests

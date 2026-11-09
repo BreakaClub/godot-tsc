@@ -85,9 +85,9 @@ env.CARGO_ENCODED_RUSTFLAGS = flags.join('\x1f');
 delete env.RUSTFLAGS;
 
 if (!existsSync(resolve(root, 'vendor/bun/Cargo.toml'))) vendor();
-console.log(`live-compile Web side module, ${profile.name} profile: Emscripten ${sdk}, target ${targetDirectory}`);
-run(cargo, ['build', '--locked', '--profile', 'wasm', '-p', 'live_compile_ext', '--features', 'web', '-Zbuild-std=std,panic_abort', '--target', 'wasm32-unknown-emscripten']);
-const built = join(targetDirectory, 'wasm32-unknown-emscripten', 'wasm', 'live_compile.wasm');
+console.log(`godot-tsc Web side module, ${profile.name} profile: Emscripten ${sdk}, target ${targetDirectory}`);
+run(cargo, ['build', '--locked', '--profile', 'wasm', '-p', 'godot_tsc_ext', '--features', 'web', '-Zbuild-std=std,panic_abort', '--target', 'wasm32-unknown-emscripten']);
+const built = join(targetDirectory, 'wasm32-unknown-emscripten', 'wasm', 'godot_tsc.wasm');
 const bytes = readFileSync(built);
 // The ABI the module was linked with must be the profile's: a lazy-table module in a stock page, or a plain one in Breaka's, fails at load.
 if ((lazyTableSections(bytes) > 0) !== profile.lazyFunctionTable) {

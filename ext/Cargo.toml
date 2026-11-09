@@ -1,13 +1,13 @@
-# The GDExtension that loads live-compile's library (`../core`) into Godot: one `LiveCompile` class whose `#[func]`s GodotJS
+# The GDExtension that loads godot-tsc's library (`../core`) into Godot: one `GodotTsc` class whose `#[func]`s GodotJS
 # exposes (README.md). Its toolchain is `../rust-toolchain.toml`: Bun's crates need a recent nightly.
 [package]
-name = "live_compile_ext"
+name = "godot_tsc_ext"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [lib]
-name = "live_compile"
+name = "godot_tsc"
 path = "lib.rs"
 crate-type = ["cdylib"]
 
@@ -20,7 +20,7 @@ web = ["godot/experimental-wasm"]
 # method is resolved on first use (`lazy-function-tables`). No experimental-threads: the Godot API is only used on the main thread, and the service thread
 # touches nothing of it.
 godot = { version = "=0.5.5", features = ["api-custom-json", "lazy-function-tables"] }
-live_compile_core = { path = "../core" }
+godot_tsc_core = { path = "../core" }
 serde_json = "1"
 
 [lints.rust]

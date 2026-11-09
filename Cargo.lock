@@ -716,7 +716,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
-name = "live_compile_core"
+name = "godot_tsc_core"
 version = "0.1.0"
 dependencies = [
  "bstr",
@@ -737,11 +737,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "live_compile_ext"
+name = "godot_tsc_ext"
 version = "0.1.0"
 dependencies = [
  "godot",
- "live_compile_core",
+ "godot_tsc_core",
  "serde_json",
 ]
 

@@ -3,7 +3,7 @@
 //   node scripts/build-native.mjs [--target=<triple>] [--cli]
 //
 // It is bound to stock Godot 4.7.2's API (scripts/godot-api.mjs), so one build serves 4.7.2 and newer engines. `--cli` also builds
-// `live-compile-cli`, a native process that answers the same requests framed on stdin and stdout (tests/compile.test.ts drives it).
+// `godot-tsc-cli`, a native process that answers the same requests framed on stdin and stdout (tests/compile.test.ts drives it).
 // Bun's crates are extracted into vendor/ first when they are not there (scripts/vendor.mjs). The toolchain is rust-toolchain.toml's nightly.
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
@@ -31,8 +31,8 @@ function run(command, commandArgs) {
 if (!existsSync(resolve(root, 'vendor/bun/Cargo.toml'))) vendor();
 const targetArgs = target === undefined ? [] : ['--target', target];
 // Two builds, not one with both packages: `--bin` selects the targets of every package named, and the extension (a library) would not be built.
-run(cargo, ['build', '--locked', '--release', '-p', 'live_compile_ext', ...targetArgs]);
-if (args.flags.has('--cli')) run(cargo, ['build', '--locked', '--release', '-p', 'live_compile_core', '--bin', 'live-compile-cli', ...targetArgs]);
+run(cargo, ['build', '--locked', '--release', '-p', 'godot_tsc_ext', ...targetArgs]);
+if (args.flags.has('--cli')) run(cargo, ['build', '--locked', '--release', '-p', 'godot_tsc_core', '--bin', 'godot-tsc-cli', ...targetArgs]);
 const built = resolve(root, 'target', ...(target === undefined ? [] : [target]), 'release', library);
 mkdirSync(OUT_BIN, { recursive: true });
 // Staged and renamed, so a Godot that has the old library mapped keeps its inode.

@@ -1,12 +1,13 @@
 /**
- * What `live-compile`'s library says, as data (`live-compile/core/protocol.rs`, `check.rs`): the extension answers in JSON text, and
- * these are the shapes it is read into. A reply that is none of them is an error, not a value (`parse*` throw).
+ * What godot-tsc's library says, as data (`core/protocol.rs`, `check.rs`): the extension answers in JSON text, and these are the
+ * shapes it is read into. A reply that is none of them is an error, not a value (`parse*` throw). The wire's names (a reply's
+ * `kind`, `compile` for a transpile) are the library's; the types here are named for what they are.
  */
 
 export type Severity = 'error' | 'warning';
 
-/** A problem the compiler found: positions in UTF-16 code units, as a JavaScript string index is; `line` and `character` count from 0. */
-export interface CompileDiagnostic {
+/** A syntax error (or warning) the transpiler found: positions in UTF-16 code units, as a JavaScript string index is; `line` and `character` count from 0. */
+export interface SyntaxDiagnostic {
   readonly start: number;
   readonly end: number;
   readonly line: number;
@@ -15,22 +16,22 @@ export interface CompileDiagnostic {
   readonly message: string;
 }
 
-export interface Compiled {
+export interface Transpiled {
   readonly ok: true;
   /** A function body: `require`, `exports`, `module`, `$RefreshReg$` and `$RefreshSig$` are its free identifiers. */
   readonly code: string;
   /** The specifiers it requires, once each, in order. */
   readonly imports: readonly string[];
   readonly exports: readonly string[];
-  readonly diagnostics: readonly CompileDiagnostic[];
+  readonly diagnostics: readonly SyntaxDiagnostic[];
 }
 
-export interface CompileFailed {
+export interface TranspileFailed {
   readonly ok: false;
-  readonly diagnostics: readonly CompileDiagnostic[];
+  readonly diagnostics: readonly SyntaxDiagnostic[];
 }
 
-export type CompileResult = Compiled | CompileFailed;
+export type TranspileResult = Transpiled | TranspileFailed;
 
 /** `DiagnosticCategory` in TypeScript's API. */
 export const CATEGORY_ERROR = 1;
@@ -78,7 +79,7 @@ export interface InlayHint {
 /** Which arguments get their parameter's name: none, the literals, or all but the ones that are the name. */
 export type ParameterNames = 'none' | 'literals' | 'all';
 
-/** What a `requestCheck` came to: its report, a failure, or that a newer check took its place before it began. */
+/** What a check came to: its report, a failure, or that a newer check took its place before it began. */
 export type CheckOutcome =
   | { readonly kind: 'checked'; readonly report: CheckReport; /** The time the service thread took, from its own clock: the answer reaches JavaScript a frame later at the soonest. */ readonly serviceMs: number }
   | { readonly kind: 'failed'; readonly message: string }
@@ -92,18 +93,18 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string');
 }
 
-function isCompileDiagnostic(value: unknown): value is CompileDiagnostic {
+function isSyntaxDiagnostic(value: unknown): value is SyntaxDiagnostic {
   return isRecord(value) && typeof value.start === 'number' && typeof value.end === 'number' && typeof value.line === 'number'
     && typeof value.character === 'number' && (value.severity === 'error' || value.severity === 'warning') && typeof value.message === 'string';
 }
 
-function diagnosticsOf(value: unknown): CompileDiagnostic[] {
-  if (!Array.isArray(value) || !value.every(isCompileDiagnostic)) throw new Error('A reply of the compiler has diagnostics that are not diagnostics');
+function diagnosticsOf(value: unknown): SyntaxDiagnostic[] {
+  if (!Array.isArray(value) || !value.every(isSyntaxDiagnostic)) throw new Error('A reply of the compiler has diagnostics that are not diagnostics');
   return value;
 }
 
-/** The compiler's answer, as the service's JSON had it (a `compile` reply's `result`). */
-export function compileResultOf(reply: unknown): CompileResult {
+/** The transpiler's answer, as the service's JSON had it (a `compile` reply's `result`). */
+export function transpileResultOf(reply: unknown): TranspileResult {
   if (!isRecord(reply)) throw new Error(`The compiler's reply is not an object: ${JSON.stringify(reply)?.slice(0, 200)}`);
   if (reply.ok === true) {
     const { code, imports, exports } = reply;
@@ -113,8 +114,8 @@ export function compileResultOf(reply: unknown): CompileResult {
   return { ok: false, diagnostics: diagnosticsOf(reply.diagnostics) };
 }
 
-export function parseCompileResult(json: string): CompileResult {
-  return compileResultOf(JSON.parse(json));
+export function parseTranspileResult(json: string): TranspileResult {
+  return transpileResultOf(JSON.parse(json));
 }
 
 function isCheckDiagnostic(value: unknown): value is CheckDiagnostic {
@@ -137,7 +138,7 @@ export interface Pong {
 export type Reply =
   | { readonly id: number; readonly kind: 'check'; readonly outcome: CheckOutcome }
   | { readonly id: number; readonly kind: 'query'; readonly serviceMs: number; readonly result: Record<string, unknown> }
-  | { readonly id: number; readonly kind: 'compile'; readonly serviceMs: number; readonly result: CompileResult }
+  | { readonly id: number; readonly kind: 'compile'; readonly serviceMs: number; readonly result: TranspileResult }
   | { readonly id: number; readonly kind: 'ping'; readonly serviceMs: number; readonly result: Pong }
   | { readonly id: number; readonly kind: 'stall'; readonly serviceMs: number };
 
@@ -151,7 +152,7 @@ export function parseReply(json: string): Reply {
       if (!isRecord(reply.result)) throw new Error('A query has no result');
       return { id, kind: 'query', serviceMs, result: reply.result };
     case 'compile':
-      return { id, kind: 'compile', serviceMs, result: compileResultOf(reply.result) };
+      return { id, kind: 'compile', serviceMs, result: transpileResultOf(reply.result) };
     case 'ping':
       if (!isRecord(reply.result) || typeof reply.result.name !== 'string' || typeof reply.result.bunRevision !== 'string') throw new Error('A ping has no name and revision');
       return { id, kind: 'ping', serviceMs, result: { name: reply.result.name, bunRevision: reply.result.bunRevision } };
@@ -175,11 +176,11 @@ function parseCheckReply(reply: Record<string, unknown>, id: number): Reply {
     return { id, kind: 'check', outcome: { kind: 'checked', report: result.report, serviceMs: reply.ms } };
   }
   const first = Array.isArray(result.diagnostics) ? result.diagnostics[0] : undefined;
-  const message = isCompileDiagnostic(first) ? first.message : `the check failed: ${JSON.stringify(result).slice(0, 300)}`;
+  const message = isSyntaxDiagnostic(first) ? first.message : `the check failed: ${JSON.stringify(result).slice(0, 300)}`;
   return { id, kind: 'check', outcome: { kind: 'failed', message } };
 }
 
-/** What the extension can say of its queue without asking the thread (`LiveCompile.state`). */
+/** What the extension can say of its queue without asking the thread (`GodotTsc.state`). */
 export interface ServiceState {
   /** A service object has been made for this host (it is made at the first request or `start`). */
   readonly started: boolean;

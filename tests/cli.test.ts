@@ -17,7 +17,7 @@ function installedPackage(): { readonly dir: string; readonly cli: string } {
   cpSync(resolve(root, 'package.json'), join(dir, 'package.json'));
   mkdirSync(join(dir, 'addon', 'godot-tsc', 'bin'), { recursive: true });
   writeFileSync(join(dir, 'addon', 'godot-tsc', 'godot_tsc.gdextension'), '[configuration]\n');
-  writeFileSync(join(dir, 'addon', 'godot-tsc', 'bin', 'liblive_compile.dylib'), 'stand-in');
+  writeFileSync(join(dir, 'addon', 'godot-tsc', 'bin', 'libgodot_tsc.dylib'), 'stand-in');
   return { dir, cli: join(dir, 'bin', 'cli.mjs') };
 }
 
@@ -88,7 +88,7 @@ test('setup installs the addon, writes .version and node_modules/.gdignore, is i
     assert.match(first.stdout, /Created node_modules\/\.gdignore/u);
     const addon = join(project, 'addons', 'godot-tsc');
     assert.ok(existsSync(join(addon, 'godot_tsc.gdextension')));
-    assert.ok(existsSync(join(addon, 'bin', 'liblive_compile.dylib')));
+    assert.ok(existsSync(join(addon, 'bin', 'libgodot_tsc.dylib')));
     assert.equal(readFileSync(join(addon, '.version'), 'utf8'), pkg.version);
     assert.ok(existsSync(join(project, 'node_modules', '.gdignore')));
 

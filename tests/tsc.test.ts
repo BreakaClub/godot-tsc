@@ -2,18 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseReply, type ProjectFile } from '../src/protocol';
 import { RequestCancelled, RequestScope } from '../src/scope';
-import { ExtensionHost, type ServiceLink } from '../src/service';
+import { Tsc, type TscLink } from '../src/tsc';
 
-// The request machinery of the live-compile host (src/service.ts) against a service that the test holds: what a request
+// The request machinery of the godot-tsc host (src/tsc.ts) against a service that the test holds: what a request
 // is until it is answered, what taking it back does, and that nothing here ever waits for the service. The service is a fake with the
-// extension's contract (live-compile/ext/lib.rs, queue.rs): every call returns at once, `cancel` removes a request so that no reply for it is
+// extension's contract (ext/lib.rs, queue.rs): every call returns at once, `cancel` removes a request so that no reply for it is
 // handed over, and `poll` hands over the replies that are ready.
 
 const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 type Kind = 'compile' | 'check' | 'query' | 'ping' | 'stall';
 
-class FakeService implements ServiceLink {
+class FakeService implements TscLink {
   readonly requests: { readonly id: number; readonly kind: Kind; readonly detail: string }[] = [];
   readonly cancelled: number[] = [];
   readonly replies: string[] = [];
@@ -41,8 +41,8 @@ class FakeService implements ServiceLink {
     return this.make('compile', `${path}|${source}|${refresh}`);
   }
 
-  requestCheck(config: string): number {
-    return this.make('check', config);
+  requestCheck(config: string, libDir: string): number {
+    return this.make('check', `${config}|${libDir}`);
   }
 
   requestQuery(requestJson: string): number {
@@ -100,11 +100,11 @@ test('a scope runs what was registered with it once when it is cancelled, and a 
   assert.throws(() => scope.onCancel(() => {}), RequestCancelled);
 });
 
-test('a compile is asked for at once and answered when the service has it: the frame goes on in between', async () => {
+test('a transpile is asked for at once and answered when the service has it: the frame goes on in between', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
+  const host = new Tsc(service);
   const answered: string[] = [];
-  const request = host.compile('/p/a.tsx', 'export const a = 1;', true, new RequestScope()).then(result => { answered.push(result.ok ? result.code : 'failed'); });
+  const request = host.transpile('/p/a.tsx', 'export const a = 1;', { reactRefresh: true }, new RequestScope()).then(result => { answered.push(result.ok ? result.code : 'failed'); });
   assert.equal(service.requests.length, 1, 'the request was made before the call returned');
   assert.equal(service.requests[0]?.kind, 'compile');
   assert.equal(service.requests[0]?.detail, '/p/a.tsx|export const a = 1;|true');
@@ -119,10 +119,10 @@ test('a compile is asked for at once and answered when the service has it: the f
 
 test('requests are answered by their ids, whatever the order the service answers in', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
+  const host = new Tsc(service);
   const scope = new RequestScope();
-  const first = host.compile('/p/a.tsx', 'A', true, scope);
-  const second = host.compile('/p/b.tsx', 'B', true, scope);
+  const first = host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, scope);
+  const second = host.transpile('/p/b.tsx', 'B', { reactRefresh: true }, scope);
   service.answer(2, compiled(2, 'CODE B'));
   service.answer(1, compiled(1, 'CODE A'));
   const [a, b] = await Promise.all([first, second]);
@@ -133,8 +133,8 @@ test('requests are answered by their ids, whatever the order the service answers
 
 test('polling stops when nothing is outstanding: an idle host asks the service for nothing', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
-  const request = host.compile('/p/a.tsx', 'A', true, new RequestScope());
+  const host = new Tsc(service);
+  const request = host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, new RequestScope());
   await pause(10);
   const whileWaiting = service.polls;
   assert.ok(whileWaiting >= 1, 'it polls while a request is outstanding');
@@ -148,9 +148,9 @@ test('polling stops when nothing is outstanding: an idle host asks the service f
 
 test('cancelling the scope takes the request back from the service and fails it as cancelled', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
+  const host = new Tsc(service);
   const scope = new RequestScope();
-  const request = host.compile('/p/a.tsx', 'A', true, scope);
+  const request = host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, scope);
   const outcome = request.then(() => 'answered', (error: unknown) => (error instanceof RequestCancelled ? 'cancelled' : String(error)));
   scope.cancel();
   assert.equal(await outcome, 'cancelled');
@@ -165,18 +165,18 @@ test('cancelling the scope takes the request back from the service and fails it 
 
 test('a request made under a scope that is already cancelled is never sent', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
+  const host = new Tsc(service);
   const scope = new RequestScope();
   scope.cancel();
-  await assert.rejects(host.compile('/p/a.tsx', 'A', true, scope), RequestCancelled);
+  await assert.rejects(host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, scope), RequestCancelled);
   assert.equal(service.requests.length, 0);
 });
 
 test('an answer that comes with the scope cancelled after it was delivered is not taken back twice', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
+  const host = new Tsc(service);
   const scope = new RequestScope();
-  const request = host.compile('/p/a.tsx', 'A', true, scope);
+  const request = host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, scope);
   service.answer(1, compiled(1, 'X'));
   await request;
   scope.cancel();
@@ -185,41 +185,41 @@ test('an answer that comes with the scope cancelled after it was delivered is no
 
 test('closing the host fails every outstanding request as cancelled, stops the service and refuses new ones', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
-  const compile = host.compile('/p/a.tsx', 'A', true, new RequestScope());
-  const check = host.requestCheck('/p/tsconfig.json', '/libs');
+  const host = new Tsc(service);
+  const compile = host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, new RequestScope());
+  const check = host.check({ config: '/p/tsconfig.json', libDir: '/libs' });
   const results = Promise.allSettled([compile, check]);
   host.close();
   const settled = await results;
   assert.ok(settled.every(result => result.status === 'rejected' && result.reason instanceof RequestCancelled));
   assert.equal(service.stopped, true);
   assert.equal(host.outstandingCount, 0);
-  await assert.rejects(host.compile('/p/b.tsx', 'B', true, new RequestScope()), RequestCancelled);
+  await assert.rejects(host.transpile('/p/b.tsx', 'B', { reactRefresh: true }, new RequestScope()), RequestCancelled);
   host.close();
 });
 
 test('a check that a newer one took the place of is answered as superseded', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
-  const older = host.requestCheck('/p/tsconfig.json', '/libs');
+  const host = new Tsc(service);
+  const older = host.check({ config: '/p/tsconfig.json', libDir: '/libs' });
   service.answer(1, '{"id":1,"kind":"check","superseded":true,"by":2}');
   assert.deepEqual(await older, { kind: 'superseded', by: 2 });
 });
 
 test('the service answering a request with the wrong kind of reply fails that request and no other', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
-  const compile = host.compile('/p/a.tsx', 'A', true, new RequestScope());
+  const host = new Tsc(service);
+  const compile = host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, new RequestScope());
   const ping = host.ping();
-  service.answer(1, '{"id":1,"kind":"ping","ms":0,"result":{"name":"live-compile","bunRevision":"x"}}');
-  service.answer(2, '{"id":2,"kind":"ping","ms":0,"result":{"name":"live-compile","bunRevision":"abc"}}');
+  service.answer(1, '{"id":1,"kind":"ping","ms":0,"result":{"name":"godot-tsc","bunRevision":"x"}}');
+  service.answer(2, '{"id":2,"kind":"ping","ms":0,"result":{"name":"godot-tsc","bunRevision":"abc"}}');
   await assert.rejects(compile, /a compile, with a ping/u);
-  assert.deepEqual(await ping, { name: 'live-compile', bunRevision: 'abc' });
+  assert.deepEqual(await ping, { name: 'godot-tsc', bunRevision: 'abc' });
 });
 
 test('a stall is a request like any other and can be taken back', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service);
+  const host = new Tsc(service);
   const scope = new RequestScope();
   const stall = host.stall(500, scope);
   assert.equal(service.requests[0]?.kind, 'stall');
@@ -230,15 +230,15 @@ test('a stall is a request like any other and can be taken back', async () => {
 
 test('a service that never answers is called dead after the deadline, and says what its queue looked like; no call waited for it', async () => {
   const service = new FakeService();
-  const host = new ExtensionHost(service, 30);
+  const host = new Tsc(service, 30);
   const started = Date.now();
-  const request = host.compile('/p/a.tsx', 'A', true, new RequestScope());
+  const request = host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, new RequestScope());
   assert.ok(Date.now() - started < 30, 'the call returned at once');
   await assert.rejects(request, /did not answer request 1 \(compile\) within 0\.03 s; its state is \{"started":true,"threadRunning":true,"queued":1/u);
   assert.deepEqual(service.cancelled, [1], 'the request was taken back');
   assert.equal(host.outstandingCount, 0);
   // A request that is answered in time leaves no deadline behind.
-  const fine = host.compile('/p/b.tsx', 'B', true, new RequestScope());
+  const fine = host.transpile('/p/b.tsx', 'B', { reactRefresh: true }, new RequestScope());
   service.answer(2, compiled(2, 'X'));
   await fine;
   await pause(60);
@@ -253,4 +253,22 @@ test('the replies of the service parse: compile, ping and stall', () => {
   const stall = parseReply('{"id":5,"kind":"stall","ms":250.000,"result":{"ok":true}}');
   assert.deepEqual(stall, { id: 5, kind: 'stall', serviceMs: 250 });
   assert.throws(() => parseReply('{"id":6,"kind":"nothing"}'), /not one/u);
+});
+
+test('a project asks its checks, hovers and inlay hints with its own configuration, and a transpile without options asks for no Fast Refresh', async () => {
+  const service = new FakeService();
+  const host = new Tsc(service);
+  const project = host.project({ config: '/p/tsconfig.json', libDir: '/libs' });
+  const check = project.check();
+  const hover = project.hover('/p/a.tsx', 7);
+  const hints = project.inlayHints('/p/a.tsx', { from: 0, to: 20 });
+  const transpile = host.transpile('/p/a.tsx', 'A');
+  assert.deepEqual(service.requests.map(request => [request.kind, request.detail]), [
+    ['check', '/p/tsconfig.json|/libs'],
+    ['query', JSON.stringify({ op: 'hover', config: '/p/tsconfig.json', libDir: '/libs', path: '/p/a.tsx', offset: 7 })],
+    ['query', JSON.stringify({ op: 'inlayHints', config: '/p/tsconfig.json', libDir: '/libs', path: '/p/a.tsx', from: 0, to: 20, parameterNames: 'literals' })],
+    ['compile', '/p/a.tsx|A|false'],
+  ]);
+  host.close();
+  for (const request of [check, hover, hints, transpile]) await assert.rejects(request, RequestCancelled);
 });

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// What `ping` reports about the build: the Bun revision the parser and the printer come from.
 pub const BUN_REVISION: &str = "408c9374b266b45fe6b8260e09be73aa82a957cd";
-pub const NAME: &str = "live-compile";
+pub const NAME: &str = "godot-tsc";
 
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]

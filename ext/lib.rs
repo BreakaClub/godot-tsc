@@ -1,4 +1,4 @@
-//! `LiveCompile`: Bun's TypeScript checker and JavaScript compiler (`live_compile_core`) as a Godot class.
+//! `GodotTsc`: Bun's TypeScript checker and JavaScript compiler (`godot_tsc_core`) as a Godot class.
 //!
 //! Threading. The extension is a main-thread one (no gdext `experimental-threads`): no Godot API is used anywhere but the thread
 //! GodotJS calls from. The library runs on a plain Rust thread of its own that touches no Godot API and talks in strings
@@ -20,14 +20,14 @@
 mod queue;
 
 use godot::prelude::*;
-use live_compile_core::protocol::{FileText, Request, TranspileRequest};
+use godot_tsc_core::protocol::{FileText, Request, TranspileRequest};
 use queue::{Job, Kind, Worker, answer};
 use std::time::Duration;
 
-struct LiveCompileExtension;
+struct GodotTscExtension;
 
 #[gdextension]
-unsafe impl ExtensionLibrary for LiveCompileExtension {}
+unsafe impl ExtensionLibrary for GodotTscExtension {}
 
 /// The stack the service thread is given. The parser, the printer and the checker recurse on the depth of the program; the
 /// checker keeps a budget of the stack it has (`set_stack_size`) and reports the files it ran out of room in. On a desktop the memory is
@@ -41,13 +41,13 @@ const SERVICE_STACK_BYTES: usize = 8 << 20;
 /// The checker and the compiler of one project.
 #[derive(GodotClass)]
 #[class(base=RefCounted, init)]
-struct LiveCompile {
+struct GodotTsc {
     worker: Option<Worker>,
     next_id: i64,
 }
 
 #[godot_api]
-impl LiveCompile {
+impl GodotTsc {
     fn worker(&mut self) -> &Worker {
         self.worker.get_or_insert_with(|| Worker::start(SERVICE_STACK_BYTES))
     }
@@ -132,7 +132,7 @@ impl LiveCompile {
         self.ask(Kind::Check, Request::Check { config: config.to_string(), lib_dir: lib_dir.to_string() })
     }
 
-    /// Starts an editor-services request, given as JSON (`{"op":"hover",...}`, `{"op":"inlayHints",...}`: `live-compile/core/protocol.rs`).
+    /// Starts an editor-services request, given as JSON (`{"op":"hover",...}`, `{"op":"inlayHints",...}`: `core/protocol.rs`).
     /// Returns the id the reply carries, which `poll` hands over as a `query` reply. A request that is not valid is answered at once, as
     /// a failed result.
     #[func]
@@ -141,7 +141,7 @@ impl LiveCompile {
             Ok(request) => self.ask(Kind::Query, request),
             Err(error) => {
                 let id = self.next_id();
-                let failed = live_compile_core::failure(format!("invalid request: {error}"));
+                let failed = godot_tsc_core::failure(format!("invalid request: {error}"));
                 self.worker().shared.reply_now(answer(id, Kind::Query, 0.0, &failed));
                 id
             }

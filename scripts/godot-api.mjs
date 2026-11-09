@@ -19,14 +19,14 @@ export const NATIVE_API = Object.freeze({
 export const WEB_PROFILES = Object.freeze({
   stock: Object.freeze({
     name: 'stock',
-    library: 'live_compile.web.stock.wasm',
+    library: 'godot_tsc.web.stock.wasm',
     extensionApi: NATIVE_API.extensionApi,
     gdextensionInterface: NATIVE_API.gdextensionInterface,
     lazyFunctionTable: false,
   }),
   breaka: Object.freeze({
     name: 'breaka',
-    library: 'live_compile.web.breaka.wasm',
+    library: 'godot_tsc.web.breaka.wasm',
     extensionApi: resolve(root, 'api/breaka-4.8/extension_api.json'),
     gdextensionInterface: resolve(root, 'api/breaka-4.8/gdextension_interface.json'),
     lazyFunctionTable: true,
@@ -42,7 +42,7 @@ export function bindingEnvironment(api) {
 export const OUT_BIN = resolve(root, 'out/bin');
 
 /** The native library's file name on each platform Godot names in a manifest. */
-export const NATIVE_LIBRARIES = Object.freeze({ macos: 'liblive_compile.dylib', linux: 'liblive_compile.so', windows: 'live_compile.dll' });
+export const NATIVE_LIBRARIES = Object.freeze({ macos: 'libgodot_tsc.dylib', linux: 'libgodot_tsc.so', windows: 'godot_tsc.dll' });
 
 /** The `--name=value` argument, or undefined; any other argument that is not in `flags` is refused. */
 export function parseArguments(argv, { flags = [], values = [] }) {

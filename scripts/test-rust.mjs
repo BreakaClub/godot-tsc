@@ -8,6 +8,6 @@ import { bindingEnvironment, NATIVE_API, parseArguments, root } from './godot-ap
 parseArguments(process.argv.slice(2), {});
 const cargo = process.env.CARGO ?? resolve(homedir(), '.cargo/bin/cargo');
 const env = { ...process.env, ...bindingEnvironment(NATIVE_API), PATH: `${resolve(homedir(), '.cargo/bin')}:${process.env.PATH ?? ''}` };
-const result = spawnSync(cargo, ['test', '--locked', '--release', '-p', 'live_compile_core', '-p', 'live_compile_ext'], { cwd: root, stdio: 'inherit', env });
+const result = spawnSync(cargo, ['test', '--locked', '--release', '-p', 'godot_tsc_core', '-p', 'godot_tsc_ext'], { cwd: root, stdio: 'inherit', env });
 if (result.error) throw result.error;
 process.exit(result.status ?? 1);

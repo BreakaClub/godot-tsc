@@ -1,7 +1,7 @@
 /**
  * The requests of one piece of work (an edit, an open) and the one thing that can be done to them together: take them back.
  *
- * Every request to the live-compile service is answered later, on a frame after the service thread has it. The work that asked for
+ * Every request to the godot-tsc service is answered later, on a frame after the service thread has it. The work that asked for
  * it can be overtaken in the meantime (a newer edit of the same file, the lab being left, the host going away). A scope is how that
  * work says "I no longer want any answer": cancelling it takes back the requests made under it that have not been answered, and every
  * one of those requests then fails with `RequestCancelled`, so no answer is ever applied after it was given up.

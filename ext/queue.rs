@@ -10,8 +10,8 @@
 //! is let finish, and its reply is dropped instead of kept. After `cancel(id)` returns true no reply for `id` is ever handed
 //! over by `poll`.
 
-use live_compile_core::Service;
-use live_compile_core::protocol::Request;
+use godot_tsc_core::Service;
+use godot_tsc_core::protocol::Request;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -239,7 +239,7 @@ impl Drop for ThreadGuard {
 /// The thread's loop: one `Service`, made here because it is not `Send`.
 fn serve(shared: &Arc<Shared>, stack_bytes: usize) {
     let _alive = ThreadGuard::begin(shared);
-    live_compile_core::native::set_stack_size(stack_bytes.saturating_sub(STACK_RESERVE_BYTES));
+    godot_tsc_core::native::set_stack_size(stack_bytes.saturating_sub(STACK_RESERVE_BYTES));
     let mut service = Service::new();
     while let Some(job) = shared.next() {
         match job {
@@ -273,7 +273,7 @@ impl Worker {
         let shared = Arc::new(Shared::new());
         let for_thread = Arc::clone(&shared);
         let thread = thread::Builder::new()
-            .name("live-compile".to_string())
+            .name("godot-tsc".to_string())
             .stack_size(stack_bytes)
             .spawn(move || serve(&for_thread, stack_bytes))
             .expect("the operating system gives a thread");
@@ -293,7 +293,7 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use live_compile_core::protocol::TranspileRequest;
+    use godot_tsc_core::protocol::TranspileRequest;
 
     /// A bound on every wait of these tests: a thread that never answers is a failure, not a hung run.
     const DEADLINE: Duration = Duration::from_secs(60);

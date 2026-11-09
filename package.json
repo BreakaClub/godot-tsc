@@ -1,6 +1,6 @@
 {
   "name": "godot-tsc",
-  "version": "0.1.0",
+  "version": "7.0.0",
   "description": "Bun's TypeScript checker and JavaScript compiler as a Godot GDExtension, with a typed GodotJS host",
   "license": "MIT",
   "repository": {

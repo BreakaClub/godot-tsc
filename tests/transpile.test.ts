@@ -3,22 +3,22 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { parseCompileResult, type CompileResult } from '../src/protocol';
+import { parseTranspileResult, type TranspileResult } from '../src/protocol';
 
 // What Bun's parser and printer, and the lowering pass of core/lower.rs, make of the shapes a module can take: a function body
 // that JavaScript parses, whose imports and exports are the ones the source names. Needs `pnpm build:native --cli`.
 
-const CLI = resolve(__dirname, '..', 'target/release/live-compile-cli');
-const NEEDS_CLI = existsSync(CLI) ? false : 'live-compile-cli is not built: run `pnpm build:native --cli`';
+const CLI = resolve(__dirname, '..', 'target/release/godot-tsc-cli');
+const NEEDS_CLI = existsSync(CLI) ? false : 'godot-tsc-cli is not built: run `pnpm build:native --cli`';
 const FRAME_HEADER_BYTES = 4;
 
-function compile(source: string, path = '/lab.tsx', refresh = true): CompileResult {
+function compile(source: string, path = '/app.tsx', refresh = true): TranspileResult {
   const body = Buffer.from(JSON.stringify({ op: 'transpile', path, source, refresh }));
   const header = Buffer.alloc(FRAME_HEADER_BYTES);
   header.writeUInt32LE(body.length);
   const reply = spawnSync(CLI, [], { input: Buffer.concat([header, body]), maxBuffer: 64 * 1024 * 1024 });
   assert.equal(reply.status, 0);
-  return parseCompileResult(reply.stdout.subarray(FRAME_HEADER_BYTES, FRAME_HEADER_BYTES + reply.stdout.readUInt32LE(0)).toString('utf8'));
+  return parseTranspileResult(reply.stdout.subarray(FRAME_HEADER_BYTES, FRAME_HEADER_BYTES + reply.stdout.readUInt32LE(0)).toString('utf8'));
 }
 
 /** The compiled module, parsed as the registry will run it. */

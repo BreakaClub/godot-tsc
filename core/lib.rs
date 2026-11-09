@@ -1,4 +1,4 @@
-//! The library behind `live-compile`: Bun's TypeScript checker and its JavaScript compiler (parser and printer) over one
+//! The library behind `godot-tsc`: Bun's TypeScript checker and its JavaScript compiler (parser and printer) over one
 //! project held in memory. `Service::handle` takes one request and gives one response (JSON). Three front ends call it:
 //! the GDExtension (`../ext`, which owns a `Service` on a thread of its own), `main.rs` (frames on stdin and stdout, for
 //! tests and tools) and `wasm` (a WebAssembly module with no imports).

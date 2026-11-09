@@ -34,7 +34,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: native-macos
-          path: out/bin/liblive_compile.dylib
+          path: out/bin/libgodot_tsc.dylib
           if-no-files-found: error
 
   build-web:
@@ -67,7 +67,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: native-web-stock
-          path: out/bin/live_compile.web.stock.wasm
+          path: out/bin/godot_tsc.web.stock.wasm
           if-no-files-found: error
 
   release:

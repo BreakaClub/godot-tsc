@@ -1,10 +1,10 @@
-# The library behind live-compile (`vendor/bun`, which `scripts/vendor-bun.py` writes): Bun's TypeScript checker and its
+# The library behind godot-tsc (`vendor/bun`, which `scripts/vendor-bun.py` writes): Bun's TypeScript checker and its
 # JavaScript compiler over one project in memory, behind one request-in, response-out function (`Service::handle`). The
 # GDExtension (`../ext`) links it; `main.rs` is a native process that speaks frames on stdin and stdout (tests and tools);
 # `wasm.rs` exports it from a WebAssembly module with no imports. The workspace is `../Cargo.toml`; the vendored crates are
 # path dependencies in theirs.
 [package]
-name = "live_compile_core"
+name = "godot_tsc_core"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -14,7 +14,7 @@ path = "lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "live-compile-cli"
+name = "godot-tsc-cli"
 path = "main.rs"
 
 [dependencies]
