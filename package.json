@@ -1,0 +1,50 @@
+{
+  "name": "godot-tsc",
+  "version": "0.1.0",
+  "description": "Bun's TypeScript checker and JavaScript compiler as a Godot GDExtension, with a typed GodotJS host",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BreakaClub/godot-tsc.git"
+  },
+  "bin": {
+    "godot-tsc": "./bin/cli.mjs"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "addon",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "postinstall": "node ./bin/cli.mjs --postinstall",
+    "setup": "node ./bin/cli.mjs setup",
+    "vendor": "node scripts/vendor.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "stage:addon": "node scripts/stage-addon.mjs",
+    "prepack": "node scripts/stage-addon.mjs --require-binaries",
+    "test:types": "tsc -p tsconfig.json",
+    "build": "pnpm test:types && node scripts/build.mjs",
+    "test": "tsx --test tests/*.test.ts",
+    "test:rust": "node scripts/test-rust.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.3",
+    "esbuild": "0.25.11",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}
