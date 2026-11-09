@@ -42,7 +42,9 @@
     "test:types": "tsc -p tsconfig.json",
     "build": "pnpm test:types && node scripts/build.mjs",
     "test": "tsx --test tests/*.test.ts",
-    "test:rust": "node scripts/test-rust.mjs"
+    "test:rust": "node scripts/test-rust.mjs",
+    "demo": "node scripts/demo.mjs",
+    "demo:verify": "node scripts/demo.mjs --verify"
   },
   "devDependencies": {
     "@types/node": "24.3.3",

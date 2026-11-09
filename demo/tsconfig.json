@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "lib": ["ES2022"],
+    "types": [],
+    "paths": { "godot-tsc": ["../src/index.ts"] }
+  },
+  "include": ["src", "typings", "../typings/timers.d.ts"]
+}

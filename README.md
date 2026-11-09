@@ -83,6 +83,33 @@ The extension's own API is the `GodotTsc` class (`ext/lib.rs`): `start`, `stop`,
 (a test hook that holds the service thread), `cancel`, `poll` (one reply as JSON, or an empty string) and `state`. Requests and
 replies are JSON (`core/protocol.rs`; validated on the TypeScript side by `src/protocol.ts`).
 
+## Demo
+
+`demo/` is a Godot project that uses the package the way a project does: a TypeScript editor whose problems, transpiled JavaScript,
+exports (the transpiled module run in the realm), inlay hints and the type under the caret all come from godot-tsc.
+
+```bash
+pnpm build:native                 # the extension (and pnpm vendor first, once)
+pnpm demo                         # stages the addon, installs it with `godot-tsc setup`, builds demo/src and opens the demo
+pnpm demo:verify                  # the same, headless: the demo edits, types and moves the caret itself and checks every answer
+```
+
+`scripts/demo.mjs` writes what the demo needs and does not commit: the installed addon, the lib files (`demo/tsc/libs.json`, from
+`typescript_libs.bin`) and GodotJS's typings for the engine. It needs a Godot with GodotJS (V8) and camel-cased bindings: `GODOT` names the
+binary, Breaka's Godot 4.8 by default. `--capture=<png>` opens it in a window, saves what it shows and quits.
+
+## Tests
+
+| Command | What it covers |
+| --- | --- |
+| `pnpm test` | `tests/tsc.test.ts`: the host's request flow (ids, polling, cancelling, the deadline, superseded checks, projects) against a stand-in link. `tests/transpile.test.ts`: the transpiler through `godot-tsc-cli`. `tests/cli.test.ts`: the installer. |
+| `pnpm test:rust` | The extension's request queue, and the checker's symbol and position helpers. |
+| `pnpm test:types` | The package's TypeScript. |
+| `pnpm demo:verify` | The extension in Godot: transpile, run, check (an error found, then fixed), hover, inlay hints and a typed syntax error, through the demo's UI. |
+| `pnpm vendor --verify` | The vendored Bun crates are Bun's at the pinned revision, plus the reviewed patches. |
+
+CI (`.github/workflows/ci.yml`) runs `test:types`, `test` and `test:rust`, vendoring Bun fresh; not the demo, which needs a Godot with GodotJS.
+
 ## Platforms
 
 | Platform | File | Notes |
@@ -99,7 +126,7 @@ WebAssembly, which is why the native side is a GDExtension and not a wasm checke
 
 ## Build from source
 
-Prerequisites: rustup (the nightly in `rust-toolchain.toml` installs itself), Node 24, pnpm, Python 3 and git. The Web build
+Prerequisites: rustup (the nightly in `rust-toolchain.toml` installs itself), Node 24 (`.node-version`: 24.15.0; 24.7.0 can crash at exit), pnpm, Python 3 and git. The Web build
 also needs `wasm32-unknown-emscripten` and `rust-src` for that nightly, and an Emscripten SDK in `EMSDK`.
 
 ```bash
@@ -133,6 +160,8 @@ patches/   seven reviewed patches to Bun's files, each with its reason in vendor
 stubs/     stand-ins for bun_crash_handler and bun_io
 api/       the Godot API dumps the extension is bound to (stock 4.7.2; Breaka's 4.8 for its Web profile)
 src/       the TypeScript API: tsc.ts (Tsc, TscProject), godot.ts (openTsc), protocol.ts, scope.ts (dist/ when built)
+demo/      a Godot project that uses the package (scripts/demo.mjs builds, runs and verifies it)
+tests/     the TypeScript tests
 ```
 
 Everything in `vendor/bun` that is not patched or stubbed is Bun's, byte for byte (`vendor/bun/provenance.json`).

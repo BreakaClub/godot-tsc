@@ -1,0 +1,7 @@
+# Made by scripts/demo.mjs and the editor: the installed addon, the lib files, GodotJS's typings and resource types for this engine, and the editor's cache.
+.godot/
+addons/
+tsc/
+typings/
+gen/
+node_modules/
