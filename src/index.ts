@@ -1,5 +1,4 @@
 // godot-tsc: Bun's TypeScript checker and transpiler in a Godot GDExtension, and the typed API GodotJS code uses it through.
+// `godot-tsc/host` is the same without `openTsc`, for code that must load where there is no `godot` module (Node).
 export { openTsc } from './godot';
-export { REQUEST_DEADLINE_MS, Tsc, TscProject, type ProjectOptions, type TextRange, type TranspileOptions, type TscHost, type TscLink } from './tsc';
-export { RequestCancelled, RequestScope } from './scope';
-export * from './protocol';
+export * from './host';

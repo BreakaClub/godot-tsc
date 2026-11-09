@@ -19,6 +19,11 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
     },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "import": "./dist/host.mjs",
+      "require": "./dist/host.js"
+    },
     "./package.json": "./package.json",
     "./typescript_libs.bin": "./libs/typescript_libs.bin"
   },

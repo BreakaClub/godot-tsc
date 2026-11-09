@@ -74,6 +74,9 @@ tsc.close();
   decorators and what they reference, 57 files). Bun's own bundle of TypeScript 7.0.2's ships with the package as
   `godot-tsc/typescript_libs.bin` (`require.resolve('godot-tsc/typescript_libs.bin')`; zstd with dictionaries, which `node:zlib`
   reads from Node 24; godot-react-ui's demo reads it). Packages resolve through `paths`; there is no `node_modules` lookup.
+- **Node.** `godot-tsc` imports the engine's `godot` module, so it loads only in GodotJS. `godot-tsc/host` is everything but `openTsc`, with no
+  `godot` import: code that drives a `Tsc` (given any `TscLink`), cancels with `RequestScope` or parses replies can be loaded and tested under Node.
+  The two entries share one module, so a `RequestCancelled` from either is the same class.
 - **Typings.** `godot-tsc` declares the `GodotTsc` class into the `godot` module, so it needs a GodotJS project's own typings for
   `godot`. `Tsc` takes any `TscLink`, which is how `tests/tsc.test.ts` drives it without Godot, and `TscHost` is the interface
   a stand-in implements.
@@ -102,7 +105,7 @@ binary, Breaka's Godot 4.8 by default. `--capture=<png>` opens it in a window, s
 
 | Command | What it covers |
 | --- | --- |
-| `pnpm test` | `tests/tsc.test.ts`: the host's request flow (ids, polling, cancelling, the deadline, superseded checks, projects) against a stand-in link. `tests/transpile.test.ts`: the transpiler through `godot-tsc-cli`. `tests/cli.test.ts`: the installer. |
+| `pnpm test` | `tests/tsc.test.ts`: the host's request flow (ids, polling, cancelling, the deadline, superseded checks, projects) against a stand-in link. `tests/transpile.test.ts`: the transpiler through `godot-tsc-cli`. `tests/cli.test.ts`: the installer. `tests/package.test.ts`: the built package as a consumer resolves it (`godot-tsc/host` under Node). |
 | `pnpm test:rust` | The extension's request queue, and the checker's symbol and position helpers. |
 | `pnpm test:types` | The package's TypeScript. |
 | `pnpm demo:verify` | The extension in Godot: transpile, run, check (an error found, then fixed), hover, inlay hints and a typed syntax error, through the demo's UI. |

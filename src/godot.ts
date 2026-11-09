@@ -1,6 +1,5 @@
 import { ClassDB, GodotTsc, PackedStringArray, RefCounted } from 'godot';
-import type { ProjectFile } from './protocol';
-import { Tsc, type TscLink } from './tsc';
+import { Tsc, type ProjectFile, type TscLink } from './host';
 
 // `GodotTsc` is the class of this package's GDExtension (`ext/lib.rs`, installed at `res://addons/godot-tsc/`). A project's
 // generated GodotJS typings describe it only if they were generated with the extension loaded, so it is declared here, and
