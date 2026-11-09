@@ -46,6 +46,8 @@ Options:
 `);
 }
 
+// Failure sets `process.exitCode` and returns, so Node exits once stderr is written: `process.exit` straight after `console.error`
+// crashes Node 24.7.0 itself (SIGSEGV in roughly one run in ten), and 24.15.0 does not.
 function run() {
   const args = process.argv.slice(2);
   const isPostinstall = args.includes('--postinstall');
@@ -55,14 +57,16 @@ function run() {
   }
   if (!isPostinstall && args[0] !== 'setup') {
     printHelp();
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const dirArgIndex = args.indexOf('--project-dir');
   const customDir = dirArgIndex === -1 ? null : args[dirArgIndex + 1];
   if (dirArgIndex !== -1 && (customDir === undefined || customDir.startsWith('--'))) {
     console.error(`[${ADDON_NAME}] Error: --project-dir needs a path`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   // npm, pnpm and yarn set INIT_CWD to the directory the user ran the install in.
   const searchStart = customDir ?? process.env.INIT_CWD ?? process.cwd();
@@ -73,7 +77,8 @@ function run() {
   if (!existsSync(SOURCE_ADDON_DIR)) {
     if (isPostinstall) return;
     console.error(`[${ADDON_NAME}] Error: Prebuilt addon directory not found at ${SOURCE_ADDON_DIR}`);
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const godotRoot = findGodotRoot(searchStart);
@@ -84,7 +89,8 @@ function run() {
     }
     console.error(`[${ADDON_NAME}] Error: Could not locate 'project.godot' ascending from: ${searchStart}`);
     console.error('Please run the command from inside your Godot project directory or specify --project-dir <path>.');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const targetAddonDir = join(godotRoot, 'addons', ADDON_NAME);
