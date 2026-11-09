@@ -1,6 +1,6 @@
 //! `LiveCompile`: Bun's TypeScript checker and JavaScript compiler (`live_compile_core`) as a Godot class.
 //!
-//! Threading. The extension is a main-thread one, as `godot_react_ui` is: no Godot API is used anywhere but the thread
+//! Threading. The extension is a main-thread one (no gdext `experimental-threads`): no Godot API is used anywhere but the thread
 //! GodotJS calls from. The library runs on a plain Rust thread of its own that touches no Godot API and talks in strings
 //! (`queue.rs`).
 //!
@@ -8,7 +8,7 @@
 //! and returns an id at once, and `poll` hands over the finished replies, which carry their id; `cancel` takes a request back.
 //! The caller is the engine's main thread, and on the Web the page's: a browser starts a pthread only when the page's thread
 //! returns to its event loop, so a call that waited for the service thread would stall the page for as long as it takes the
-//! thread to start (docs/tracks/live-compile-async.md has the evidence), and would never be answered if the page waited in
+//! thread to start (30 s on a cold page, measured in godot-react-ui's Web demo), and would never be answered if the page waited in
 //! the turn that asked for the thread. The calls that remain synchronous are the ones that only move a value under a lock
 //! that is never held while a request runs: `start`, `stop`, `set_file`, `set_files`, `remove_file`, `request_*`, `cancel`,
 //! `poll` and `state`.

@@ -5,3 +5,10 @@ rustflags = ["-C", "link-arg=-zstack-size=8388608", "--cap-lints=warn"]
 
 [target.aarch64-apple-darwin]
 rustflags = ["--cap-lints=warn"]
+
+# The Godot API the extension is bound to (`ext/Cargo.toml`, godot-rust's `api-custom-json`): stock Godot 4.7.2, so it loads in 4.7.2
+# and anything newer. A plain `cargo build` or `cargo test` reads this; the build scripts set the same pair themselves
+# (scripts/godot-api.mjs), because cargo's `[env]` does not override a variable that is already set.
+[env]
+GDRUST_GODOT_API_JSON = { value = "api/godot-4.7.2/extension_api.json", relative = true }
+GDRUST_GODOT_INTERFACE_JSON = { value = "api/godot-4.7.2/gdextension_interface.json", relative = true }

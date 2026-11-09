@@ -1,6 +1,5 @@
 # Bun's toolchain at the vendored revision (408c9374b26): the checker and the transpiler crates under this directory use
-# Bun's Rust libraries, which need this nightly. The repository's own pin (../rust-toolchain.toml) is for the
-# `native/` extension and does not apply here.
+# Bun's Rust libraries, which need this nightly.
 [toolchain]
 channel = "nightly-2026-09-15"
 targets = ["wasm32-unknown-unknown"]

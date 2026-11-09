@@ -1,0 +1,11 @@
+# Generated: Bun's vendored crates (scripts/vendor.mjs), the Bun checkout it reads, cargo's output, the staged addon and packs.
+vendor/
+.cache/
+target/
+out/
+addon/
+dist/
+release/
+node_modules/
+*.tgz
+.DS_Store

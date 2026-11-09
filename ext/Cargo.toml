@@ -1,6 +1,5 @@
 # The GDExtension that loads live-compile's library (`../core`) into Godot: one `LiveCompile` class whose `#[func]`s GodotJS
-# exposes (docs/tracks/live-compile.md). It is a separate extension from `godot_react_ui`, for the demo only, and has its own
-# toolchain (`../rust-toolchain.toml`: Bun's crates need a newer nightly than the UI extension's).
+# exposes (README.md). Its toolchain is `../rust-toolchain.toml`: Bun's crates need a recent nightly.
 [package]
 name = "live_compile_ext"
 version = "0.1.0"
@@ -13,12 +12,12 @@ path = "lib.rs"
 crate-type = ["cdylib"]
 
 [features]
-# The Web side module (scripts/build-live-compile-web.mjs): gdext's experimental support for wasm32-unknown-emscripten.
+# The Web side module (scripts/build-web.mjs): gdext's experimental support for wasm32-unknown-emscripten.
 web = ["godot/experimental-wasm"]
 
 [dependencies]
-# The same binding as the UI extension (../../Cargo.toml): lean Web templates omit optional classes, so each method is
-# resolved on first use. No experimental-threads: the Godot API is only used on the main thread, and the service thread
+# Bound to the API dumps in `../api` (`api-custom-json`; scripts/godot-api.mjs). Lean Web templates omit optional classes, so each
+# method is resolved on first use (`lazy-function-tables`). No experimental-threads: the Godot API is only used on the main thread, and the service thread
 # touches nothing of it.
 godot = { version = "=0.5.5", features = ["api-custom-json", "lazy-function-tables"] }
 live_compile_core = { path = "../core" }
