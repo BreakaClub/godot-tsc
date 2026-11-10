@@ -34,6 +34,11 @@ pub enum Request {
         path: String,
         offset: usize,
     },
+    /// One Language Server Protocol message (a JSON-RPC request or notification) for the service's language server (`lsp.rs`). The
+    /// response is `{"ok":true,"messages":[...]}`: what the server sends back, the response to a request among them.
+    Lsp {
+        message: serde_json::Value,
+    },
     /// The inlay hints between UTF-16 offsets `from` and `to` of the file at `path` (`services::inlay_hints`).
     InlayHints {
         config: String,

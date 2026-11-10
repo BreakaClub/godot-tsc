@@ -7,6 +7,8 @@
 
 pub mod check;
 mod lower;
+mod lsp;
+mod navigate;
 pub mod native;
 mod positions;
 pub mod protocol;

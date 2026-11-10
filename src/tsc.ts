@@ -1,5 +1,5 @@
 import {
-  parseHover, parseInlayHints, parseReply, parseServiceState, type CheckOutcome, type TranspileResult, type Hover, type InlayHint, type ParameterNames, type Pong, type ProjectFile,
+  parseHover, parseInlayHints, parseLspMessages, parseReply, parseServiceState, type CheckOutcome, type TranspileResult, type Hover, type InlayHint, type LspMessage, type ParameterNames, type Pong, type ProjectFile,
   type Reply, type ServiceState,
 } from './protocol';
 import { RequestCancelled, type RequestScope } from './scope';
@@ -97,6 +97,11 @@ export interface TscHost {
   hover(project: ProjectOptions, path: string, offset: number, scope?: RequestScope): Promise<Hover | null>;
   /** The inferred types of declarations and the parameter names of arguments in `range` of the file at `path`. */
   inlayHints(project: ProjectOptions, path: string, range: TextRange, parameterNames: ParameterNames, scope?: RequestScope): Promise<InlayHint[]>;
+  /**
+   * One Language Server Protocol message for the service's language server (a request or a notification), and the messages it sends back:
+   * the response to a request among them. `LspSession` (`lsp.ts`) speaks it with ids and typed results.
+   */
+  lsp(message: LspMessage, scope?: RequestScope): Promise<LspMessage[]>;
   /** Ends the service. Every request still outstanding fails with `RequestCancelled`. */
   close(): void;
 }
@@ -185,6 +190,10 @@ export class Tsc implements TscHost {
   inlayHints(project: ProjectOptions, path: string, range: TextRange, parameterNames: ParameterNames, scope?: RequestScope): Promise<InlayHint[]> {
     const request = { op: 'inlayHints', config: project.config, libDir: project.libDir, path, from: range.from, to: range.to, parameterNames };
     return this.query(request, scope).then(parseInlayHints);
+  }
+
+  lsp(message: LspMessage, scope?: RequestScope): Promise<LspMessage[]> {
+    return this.query({ op: 'lsp', message }, scope).then(parseLspMessages);
   }
 
   /** Asks the library its name and the Bun revision it is made from. */

@@ -39,6 +39,11 @@ impl MemoryHost {
         self.index_directories();
     }
 
+    /// The text of the file at `path`, if there is one.
+    pub fn text(&self, path: &[u8]) -> Option<&[u8]> {
+        self.files.get(path).map(Vec::as_slice)
+    }
+
     /// Removes the file at `path`, which must be there.
     pub fn remove(&mut self, path: &[u8]) {
         assert!(self.files.remove(path).is_some(), "no file to remove at {}", String::from_utf8_lossy(path));
@@ -134,6 +139,26 @@ impl<'t> Positions<'t> {
     pub(crate) fn units(&self, from: usize, to: usize) -> usize {
         let bytes = &self.text[from..to];
         bytes.iter().filter(|&&b| b & 0xC0 != 0x80).count() + bytes.iter().filter(|&&b| b >= 0xF0).count()
+    }
+
+    /// The byte offset of a line and a character in UTF-16 code units (an LSP position), clamped to the line and the text.
+    pub(crate) fn byte_at(&self, line: usize, character: usize) -> usize {
+        let Some(&start) = self.starts.get(line) else {
+            return self.text.len();
+        };
+        let end = self.starts.get(line + 1).map_or(self.text.len(), |&next| next as usize);
+        let mut at = start as usize;
+        let mut units = 0;
+        while at < end && units < character {
+            let byte = self.text[at];
+            // A four-byte sequence is two UTF-16 units; a continuation byte is none.
+            units += if byte >= 0xF0 { 2 } else { 1 };
+            at += 1;
+            while at < end && self.text[at] & 0xC0 == 0x80 {
+                at += 1;
+            }
+        }
+        at
     }
 
     /// `(offset, line, character)` in UTF-16 code units of the byte offset `at`; the line counts from 0.
@@ -558,4 +583,70 @@ pub(crate) fn with_services_of<R>(
     checker.check_file(file);
     let text = &program.files.modules[file.idx()].hir.text[..];
     Some(checker.with_services(file, None, |services| then(services, file, text)))
+}
+
+/// One loaded program and its checker, for a question about several of its files (where a symbol is referenced): the program is
+/// loaded once, and each file is checked when its services are asked for. Nodes (`NodeRef`) keep their meaning across the files'
+/// services; symbols (`SymbolRef`) do not.
+pub(crate) struct ProgramView<'p, 's> {
+    program: &'p Program<'s>,
+    checker: bun_sema::check::Checker<'p, 's>,
+    lib_prefix: Vec<u8>,
+}
+
+impl<'p, 's> ProgramView<'p, 's> {
+    /// The file at `path`, if the program has it.
+    pub(crate) fn file(&self, path: &[u8]) -> Option<FileId> {
+        self.program.files.modules.iter().position(|module| module.file_name() == path).map(|index| FileId(index as u32))
+    }
+
+    pub(crate) fn path(&self, file: FileId) -> &'p [u8] {
+        self.program.files.modules[file.idx()].file_name()
+    }
+
+    /// Whether `file` is one of the lib files: the checker keeps no text of them, so nothing in them has a position.
+    pub(crate) fn is_lib(&self, file: FileId) -> bool {
+        self.path(file).starts_with(&self.lib_prefix)
+    }
+
+    /// Every file of the program that is not a lib file.
+    pub(crate) fn project_files(&self) -> Vec<FileId> {
+        (0..self.program.files.modules.len() as u32).map(FileId).filter(|&file| !self.is_lib(file)).collect()
+    }
+
+    /// Checks `file` and runs `then` with its services and its text.
+    pub(crate) fn with_services<R>(
+        &mut self,
+        file: FileId,
+        then: impl FnOnce(&mut bun_sema::check::services::Services<'_, '_, '_>, FileId, &[u8]) -> R,
+    ) -> R {
+        self.checker.check_file(file);
+        let text = &self.program.files.modules[file.idx()].hir.text[..];
+        self.checker.with_services(file, None, |services| then(services, file, text))
+    }
+}
+
+/// Runs `then` with the program of the project whose configuration is `config` (loaded as a check loads it), which is dropped when it
+/// returns.
+pub(crate) fn with_program<R>(
+    host: &MemoryHost,
+    runs: &mut Runs,
+    config: &[u8],
+    lib_dir: &[u8],
+    then: impl FnOnce(&mut ProgramView<'_, '_>) -> R,
+) -> R {
+    // Declared before the session, so that it is dropped after it.
+    let _shared;
+    let session = Session::new();
+    let (program, _, shared) = load(&session, host, runs, config, lib_dir);
+    _shared = shared;
+    let mut checker = program.checker();
+    checker.set_requested(Requested::All);
+    checker.begin_stack_budget();
+    let mut lib_prefix = lib_dir.to_vec();
+    if !lib_prefix.ends_with(b"/") {
+        lib_prefix.push(b'/');
+    }
+    let mut view = ProgramView { program, checker, lib_prefix };
+    then(&mut view)
 }

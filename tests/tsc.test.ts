@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseReply, type ProjectFile } from '../src/protocol';
 import { RequestCancelled, RequestScope } from '../src/scope';
+import { LspError, LspSession, fileUri, pathOfUri } from '../src/lsp';
 import { Tsc, type TscLink } from '../src/tsc';
 
 // The request machinery of the godot-tsc host (src/tsc.ts) against a service that the test holds: what a request
@@ -271,4 +272,41 @@ test('a project asks its checks, hovers and inlay hints with its own configurati
   ]);
   host.close();
   for (const request of [check, hover, hints, transpile]) await assert.rejects(request, RequestCancelled);
+});
+
+test('an LSP session sends each message as an lsp query, picks its response by id, and fails with the code a refusal has', async () => {
+  const service = new FakeService();
+  const host = new Tsc(service);
+  const session = new LspSession(host, { config: '/p/tsconfig.json', libDir: '/libs' });
+  const answer = (index: number, messages: unknown[]): void => {
+    const request = service.requests[index];
+    assert.ok(request);
+    service.answer(request.id, JSON.stringify({ id: request.id, kind: 'query', ms: 1, result: { ok: true, messages } }));
+  };
+  const lspOf = (index: number): Record<string, unknown> => JSON.parse(service.requests[index]?.detail ?? '{}').message;
+
+  const initialized = session.initialize();
+  assert.deepEqual(lspOf(0).params, { processId: null, rootUri: null, capabilities: {}, initializationOptions: { config: '/p/tsconfig.json', libDir: '/libs' } });
+  answer(0, [{ jsonrpc: '2.0', id: lspOf(0).id, result: { capabilities: { definitionProvider: true } } }]);
+  // `initialized` follows `initialize`'s answer, as a notification.
+  while (service.requests.length === 0) await pause(1);
+  assert.equal(lspOf(0).method, 'initialized');
+  assert.equal(lspOf(0).id, undefined);
+  answer(0, []);
+  assert.deepEqual(await initialized, { definitionProvider: true });
+
+  const definition = session.definition('/p/a b.ts', { line: 1, character: 2 });
+  const asked = lspOf(0);
+  assert.deepEqual(asked.params, { textDocument: { uri: 'file:///p/a%20b.ts' }, position: { line: 1, character: 2 } });
+  const location = { uri: 'file:///p/a%20b.ts', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } };
+  // A notification the server sends with the response is not the response.
+  answer(0, [{ jsonrpc: '2.0', method: 'window/logMessage', params: {} }, { jsonrpc: '2.0', id: asked.id, result: [location] }]);
+  assert.deepEqual(await definition, [location]);
+
+  const refused = session.prepareRename('/p/a.ts', { line: 0, character: 0 });
+  answer(0, [{ jsonrpc: '2.0', id: lspOf(0).id, error: { code: -32803, message: 'You cannot rename this element.' } }]);
+  await assert.rejects(refused, (error: unknown) => error instanceof LspError && error.code === -32803 && error.message === 'You cannot rename this element.');
+
+  assert.equal(pathOfUri(fileUri('/p/a b#c.ts')), '/p/a b#c.ts');
+  host.close();
 });

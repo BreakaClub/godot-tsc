@@ -180,6 +180,31 @@ function parseCheckReply(reply: Record<string, unknown>, id: number): Reply {
   return { id, kind: 'check', outcome: { kind: 'failed', message } };
 }
 
+/** A Language Server Protocol message: a JSON-RPC request, notification or response. */
+export interface LspMessage {
+  readonly jsonrpc: '2.0';
+  readonly id?: number | string | null;
+  readonly method?: string;
+  readonly params?: unknown;
+  readonly result?: unknown;
+  readonly error?: { readonly code: number; readonly message: string; readonly data?: unknown };
+}
+
+function isLspMessage(value: unknown): value is LspMessage {
+  return isRecord(value) && value.jsonrpc === '2.0';
+}
+
+/** The messages the language server sent back for one message (`{"op":"lsp"}`): the response to a request among them. */
+export function parseLspMessages(result: Record<string, unknown>): LspMessage[] {
+  if (result.ok !== true) {
+    const first = Array.isArray(result.diagnostics) ? result.diagnostics[0] : undefined;
+    throw new Error(isSyntaxDiagnostic(first) ? first.message : `the language server failed: ${JSON.stringify(result).slice(0, 300)}`);
+  }
+  const messages = result.messages;
+  if (!Array.isArray(messages) || !messages.every(isLspMessage)) throw new Error('The language server answered with something that is not a list of LSP messages');
+  return messages;
+}
+
 /** What the extension can say of its queue without asking the thread (`GodotTsc.state`). */
 export interface ServiceState {
   /** A service object has been made for this host (it is made at the first request or `start`). */

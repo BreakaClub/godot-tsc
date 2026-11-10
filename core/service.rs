@@ -10,6 +10,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 pub struct Service {
     host: MemoryHost,
     runs: Runs,
+    lsp: crate::lsp::Lsp,
 }
 
 /// A response that is a failure with one message and no position.
@@ -80,6 +81,10 @@ impl Service {
             Request::InlayHints { config, lib_dir, path, from, to, parameter_names } => {
                 let file = crate::services::FileInProject { config: config.as_bytes(), lib_dir: lib_dir.as_bytes(), path: path.as_bytes() };
                 crate::services::inlay_hints(&self.host, &mut self.runs, &file, (from, to), parameter_names)
+            }
+            Request::Lsp { message } => {
+                let messages = self.lsp.handle(&mut self.host, &mut self.runs, &message);
+                serde_json::json!({ "ok": true, "messages": messages }).to_string()
             }
             Request::Check { config, lib_dir } => {
                 let report = check::check(&self.host, &mut self.runs, config.as_bytes(), lib_dir.as_bytes());

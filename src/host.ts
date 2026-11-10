@@ -3,3 +3,4 @@
 export { REQUEST_DEADLINE_MS, Tsc, TscProject, type ProjectOptions, type TextRange, type TranspileOptions, type TscHost, type TscLink } from './tsc';
 export { RequestCancelled, RequestScope } from './scope';
 export * from './protocol';
+export { LspError, LspSession, fileUri, pathOfUri, type LspDocumentHighlight, type LspLocation, type LspPosition, type LspRange, type LspTextEdit, type LspWorkspaceEdit } from './lsp';

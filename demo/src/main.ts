@@ -1,7 +1,8 @@
-import { Callable, CodeEdit, Color, Control, Engine, FileAccess, GError, HSplitContainer, ItemList, Label, MarginContainer, OS, RenderingServer, TabContainer, VBoxContainer } from 'godot';
+import { Button, Callable, CodeEdit, Color, Control, Engine, FileAccess, GError, HBoxContainer, HSplitContainer, ItemList, Label, LineEdit, MarginContainer, OS, RenderingServer, TabContainer, VBoxContainer } from 'godot';
 import {
-  CATEGORY_ERROR, RequestCancelled, RequestScope, openTsc,
-  type CheckDiagnostic, type CheckOutcome, type InlayHint, type ProjectFile, type TranspileResult, type Tsc, type TscProject,
+  CATEGORY_ERROR, LspSession, RequestCancelled, RequestScope, fileUri, openTsc,
+  type CheckDiagnostic, type CheckOutcome, type InlayHint, type LspLocation, type LspPosition, type LspTextEdit, type ProjectFile, type TranspileResult,
+  type Tsc, type TscProject,
 } from 'godot-tsc';
 
 /** Where the demo's lib files are (written by `scripts/demo.mjs` from the package's `typescript_libs.bin`). */
@@ -76,6 +77,24 @@ function readLibFiles(): ProjectFile[] {
   });
 }
 
+/** The LSP position (UTF-16) of a TextEdit position (Godot counts a line's columns in code points). */
+function lspPosition(text: string, line: number, column: number): LspPosition {
+  return { line, character: Array.from(text.split('\n')[line] ?? '').slice(0, column).join('').length };
+}
+
+/** The TextEdit column (code points) of an LSP position. */
+function columnOf(text: string, position: LspPosition): number {
+  return Array.from((text.split('\n')[position.line] ?? '').slice(0, position.character)).length;
+}
+
+/** `text` with LSP edits applied (from the last, so that the earlier ranges stay where they were). */
+function applyEdits(text: string, edits: readonly LspTextEdit[]): string {
+  const lines = text.split('\n');
+  const offset = (position: LspPosition): number => lines.slice(0, position.line).reduce((sum, line) => sum + line.length + 1, 0) + position.character;
+  return [...edits].sort((a, b) => offset(b.range.start) - offset(a.range.start))
+    .reduce((current, edit) => current.slice(0, offset(edit.range.start)) + edit.newText + current.slice(offset(edit.range.end)), text);
+}
+
 /** The UTF-16 offset of a TextEdit position (Godot counts a line's columns in code points). */
 function offsetOf(text: string, line: number, column: number): number {
   const lines = text.split('\n');
@@ -128,6 +147,12 @@ export default class Main extends Control {
   private problems: ItemList | null = null;
   private javascript: CodeEdit | null = null;
   private hints: ItemList | null = null;
+  private references: ItemList | null = null;
+  private tabs: TabContainer | null = null;
+  private newName: LineEdit | null = null;
+  /** The language server of the service (`LspSession`), once `initialize` has been answered. */
+  private lsp: Promise<LspSession> | null = null;
+  private referencesScope: RequestScope | null = null;
   private exportsList: ItemList | null = null;
   private status: Label | null = null;
   private hover: Label | null = null;
@@ -146,6 +171,8 @@ export default class Main extends Control {
     this.tsc = tsc;
     tsc.setFiles([...readLibFiles(), { path: CONFIG_PATH, text: CONFIG }]);
     this.project = tsc.project({ config: CONFIG_PATH, libDir: LIB_DIR });
+    const lsp = new LspSession(tsc, { config: CONFIG_PATH, libDir: LIB_DIR });
+    this.lsp = lsp.initialize().then(() => lsp);
     const args = OS.getCmdlineUserArgs();
     const userArgs = Array.from({ length: args.size() }, (_, index) => args.get(index));
     if (userArgs.includes(VERIFY_ARGUMENT)) {
@@ -169,10 +196,14 @@ export default class Main extends Control {
     this.requireSource().text = SAMPLE;
   }
 
-  /** The sample as a person sees it, the caret on `origin` in the call, saved to `path`. */
+  /** The sample as a person sees it, the caret on `origin` in the call and its references listed, saved to `path`. */
   private async capture(path: string): Promise<void> {
     await this.edit(SAMPLE);
     await this.moveCaretOntoOrigin();
+    await this.referencesAt(this.caretPosition(), new RequestScope());
+    const tabs = this.tabs;
+    if (!tabs) throw new Error('The demo was not built');
+    tabs.currentTab = tabs.getTabCount() - 1;
     const start = Engine.getProcessFrames();
     while (Engine.getProcessFrames() - start < CAPTURE_SETTLE_FRAMES) await new Promise(resolve => setTimeout(() => resolve(undefined), FRAME_POLL_MS));
     RenderingServer.forceDraw();
@@ -225,6 +256,8 @@ export default class Main extends Control {
     this.settleTimer = undefined;
     this.refreshScope?.cancel();
     this.hoverScope?.cancel();
+    this.referencesScope?.cancel();
+    this.lsp = null;
     this.tsc?.close();
     this.tsc = null;
     this.project = null;
@@ -256,6 +289,7 @@ export default class Main extends Control {
     const tabs = new TabContainer();
     tabs.sizeFlagsHorizontal = Control.SizeFlags.SizeExpandFill;
     split.addChild(tabs);
+    this.tabs = tabs;
 
     const problems = new ItemList();
     problems.setName('Problems');
@@ -277,6 +311,33 @@ export default class Main extends Control {
     hints.setName('Inlay hints');
     tabs.addChild(hints);
     this.hints = hints;
+
+    const references = new ItemList();
+    references.setName('References');
+    tabs.addChild(references);
+    this.references = references;
+
+    // Go to definition and rename, at the caret (Ctrl+click on a name goes to its definition too).
+    const actions = new HBoxContainer();
+    column.addChild(actions);
+    const definition = new Button();
+    definition.text = 'Go to definition';
+    definition.pressed.connect(Callable.create(() => this.report(this.goToDefinition())));
+    actions.addChild(definition);
+    const renameLabel = new Label();
+    renameLabel.text = 'Rename the name at the caret to';
+    actions.addChild(renameLabel);
+    const newName = new LineEdit();
+    newName.sizeFlagsHorizontal = Control.SizeFlags.SizeExpandFill;
+    actions.addChild(newName);
+    this.newName = newName;
+    const rename = new Button();
+    rename.text = 'Rename';
+    rename.pressed.connect(Callable.create(() => this.report(this.renameAtCaret(newName.text))));
+    actions.addChild(rename);
+    source.symbolLookupOnClick = true;
+    source.symbolValidate.connect(Callable.create(() => source.setSymbolLookupWordAsValid(true)));
+    source.symbolLookup.connect(Callable.create(() => this.report(this.goToDefinition())));
 
     const hover = new Label();
     hover.text = 'Move the caret onto a name to see its type.';
@@ -387,10 +448,62 @@ export default class Main extends Control {
     this.markedLines.push(line);
   }
 
+  /** Shows what an action that a button started came to, if it failed: a button's signal does not wait for a promise. */
+  private report(action: Promise<unknown>): void {
+    action.catch((error: unknown) => {
+      if (isCancellation(error)) return;
+      this.requireStatus().text = error instanceof Error ? error.message : String(error);
+    });
+  }
+
+  private caretPosition(): LspPosition {
+    const source = this.requireSource();
+    return lspPosition(source.text, source.getCaretLine(), source.getCaretColumn());
+  }
+
+  /** Lists the references of the name at `position` in the References tab. */
+  private async referencesAt(position: LspPosition, scope: RequestScope): Promise<LspLocation[]> {
+    const lsp = await this.requireLsp();
+    this.requireTsc().setFile(SOURCE_PATH, this.requireSource().text);
+    const found = await lsp.references(SOURCE_PATH, position, true, scope);
+    const list = this.requireReferences();
+    list.clear();
+    const lines = this.requireSource().text.split('\n');
+    for (const location of found) {
+      list.addItem(`${location.range.start.line + 1}:${location.range.start.character + 1}  ${(lines[location.range.start.line] ?? '').trim()}`);
+    }
+    return found;
+  }
+
+  /** Moves the caret to the definition of the name at the caret. */
+  private async goToDefinition(scope?: RequestScope): Promise<LspLocation | null> {
+    const lsp = await this.requireLsp();
+    const source = this.requireSource();
+    this.requireTsc().setFile(SOURCE_PATH, source.text);
+    const [found] = await lsp.definition(SOURCE_PATH, this.caretPosition(), scope);
+    if (found === undefined || found.uri !== fileUri(SOURCE_PATH)) return null;
+    source.setCaretLine(found.range.start.line);
+    source.setCaretColumn(columnOf(source.text, found.range.start));
+    return found;
+  }
+
+  /** Renames the name at the caret everywhere, and resolves with what the demo shows for the renamed source. */
+  private async renameAtCaret(newName: string, scope?: RequestScope): Promise<Refresh> {
+    const lsp = await this.requireLsp();
+    const source = this.requireSource();
+    this.requireTsc().setFile(SOURCE_PATH, source.text);
+    const edit = await lsp.rename(SOURCE_PATH, this.caretPosition(), newName, scope);
+    return this.edit(applyEdits(source.text, edit.changes[fileUri(SOURCE_PATH)] ?? []));
+  }
+
   private showHover(): void {
     const source = this.requireSource();
     const text = source.text;
     const offset = offsetOf(text, source.getCaretLine(), source.getCaretColumn());
+    this.referencesScope?.cancel();
+    const referencesScope = new RequestScope();
+    this.referencesScope = referencesScope;
+    this.report(this.referencesAt(this.caretPosition(), referencesScope));
     this.hoverAt(offset).then(shown => {
       this.hoverWaiters = this.settle(this.hoverWaiters, offset, shown);
     }, (error: unknown) => {
@@ -447,6 +560,21 @@ export default class Main extends Control {
       if (this.requireHover().text !== hover) throw new Error(`The hover line shows "${this.requireHover().text}"`);
       if (!hover.startsWith('origin:') || !hover.includes('x: number')) throw new Error(`Hover on origin showed "${hover}"`);
 
+      // The language server, with the caret on `origin`: its references, then its definition, then a rename.
+      const references = await this.referencesAt(this.caretPosition(), new RequestScope());
+      const originLine = SAMPLE.split('\n').findIndex(line => line.startsWith('const origin'));
+      const referenceLines = references.map(location => location.range.start.line).join();
+      if (referenceLines !== `${originLine},${dLine - 1}` || this.requireReferences().itemCount !== 2) throw new Error(`The references of origin are ${JSON.stringify(references)}`);
+      const definition = await this.goToDefinition(new RequestScope());
+      if (definition?.range.start.line !== originLine || this.requireSource().getCaretLine() !== originLine || this.requireSource().getCaretColumn() !== 'const '.length) {
+        throw new Error(`Going to origin's definition went to ${JSON.stringify(definition)}`);
+      }
+      const renamed = await this.renameAtCaret('start', new RequestScope());
+      if (renamed.text !== SAMPLE.replace('const origin', 'const start').replace('distance(origin', 'distance(start')) throw new Error(`The rename gave:\n${renamed.text}`);
+      if (renamed.check.kind !== 'checked' || renamed.check.report.diagnostics.length !== 1 || renamed.run?.ok !== true || renamed.run.exports.d !== 5) {
+        throw new Error(`The renamed source checks or runs otherwise: ${JSON.stringify(renamed.check)}`);
+      }
+
       // The fix: the error goes away.
       const fixed = SAMPLE.replace('export const label: string = d;', 'export const label: string = d.toFixed(2);');
       const second = await this.edit(fixed);
@@ -459,7 +587,7 @@ export default class Main extends Control {
       if (third.transpile.ok || third.transpile.diagnostics.length === 0) throw new Error('A syntax error transpiled');
       if (!problems.getItemText(0).includes('syntax')) throw new Error(`The Problems tab shows "${problems.getItemText(0)}" for a syntax error`);
 
-      return `transpile ${first.transpileMs.toFixed(1)} ms, check ${first.check.serviceMs.toFixed(1)} ms, ran (d = 5), TS2322 found and cleared, hover "${hover}", ${first.hints.length} inlay hints, syntax error reported`;
+      return `transpile ${first.transpileMs.toFixed(1)} ms, check ${first.check.serviceMs.toFixed(1)} ms, ran (d = 5), TS2322 found and cleared, hover "${hover}", ${first.hints.length} inlay hints, ${references.length} references, definition and rename, syntax error reported`;
     } finally {
       clearTimeout(deadline);
     }
@@ -493,6 +621,16 @@ export default class Main extends Control {
   private requireHints(): ItemList {
     if (!this.hints) throw new Error('The demo was not built');
     return this.hints;
+  }
+
+  private requireReferences(): ItemList {
+    if (!this.references) throw new Error('The demo was not built');
+    return this.references;
+  }
+
+  private requireLsp(): Promise<LspSession> {
+    if (!this.lsp) throw new Error('The demo has no language server');
+    return this.lsp;
   }
 
   private requireExportsList(): ItemList {
