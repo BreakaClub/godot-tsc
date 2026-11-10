@@ -75,7 +75,14 @@ SOURCEMAP = "patches/bun-sourcemap-write-only.patch"
 WASM32 = "patches/bun-wasm32.patch"
 PARSER = "patches/bun-js-parser-wasm32.patch"
 STANDALONE = "patches/bun-standalone-native.patch"
+# Written against the files as WASM32 leaves them: patches apply in the order SOURCE_ADAPTATIONS first names them.
+APPLE = "patches/bun-apple-targets.patch"
+APPLE_REASON = ("Bun builds for macOS only among Apple's systems, so what is Darwin's (errno values, stat fields, kqueue, "
+                "Mach calls, the dispatch thread pool, os_signpost) is behind `target_os = \"macos\"`, and iOS matches no branch. "
+                "Those conditions are `target_vendor = \"apple\"`: the same code on macOS, and iOS takes it too.")
 
+# Written against the file as WASM32 and APPLE leave it.
+ANDROID = "patches/bun-android.patch"
 
 def adaptation(path, patch, reason):
     return {"path": path, "patch": patch, "reason": reason}
@@ -139,6 +146,13 @@ SOURCE_ADAPTATIONS = [
     adaptation("src/threading/Futex.rs", WASM32, "Without atomics wasm has one thread: waiting never blocks."),
     adaptation("src/threading/lib.rs", WASM32, "The futex module is cfg-gated as Futex.rs is."),
     adaptation("src/windows_sys/externs.rs", WASM32, "The inline assembly has no wasm branch."),
+    *(adaptation(f"src/{path}", APPLE, APPLE_REASON) for path in [
+        "bun_alloc/heap_breakdown.rs", "bun_alloc/lib.rs", "bun_core/Global.rs", "bun_core/env.rs", "bun_core/lib.rs",
+        "bun_core/result.rs", "bun_core/thread_id.rs", "bun_core/util.rs", "errno/lib.rs", "perf/lib.rs", "sys/PosixStat.rs",
+        "sys/copy_file.rs", "sys/fd.rs", "sys/lib.rs", "threading/ThreadPool.rs", "threading/io_thread_pool.rs"]),
+    adaptation("src/bun_core/util.rs", ANDROID,
+               "Thread-local random seeds come from getrandom, which Android's C library has from API level 28: a library for "
+               "API level 24, the oldest Godot runs on, reads /dev/urandom."),
     adaptation(STANDALONE_NATIVE, STANDALONE,
                "Bun's native shims for binaries that link the checker and the parser (mimalloc, highway, simdutf, dtoa, ...) serve the host crate: "
                "malloc without a C library on wasm, no weak linkage there, and simdutf's base64 encoder (React Fast Refresh's hook signatures are the base64 of a hash; Bun's shim leaves it unimplemented)."),

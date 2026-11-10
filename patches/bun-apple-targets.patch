@@ -1,0 +1,1281 @@
+--- a/src/bun_alloc/heap_breakdown.rs
++++ b/src/bun_alloc/heap_breakdown.rs
+@@ -1,14 +1,14 @@
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ use core::ffi::c_uint;
+ use core::ffi::{c_char, c_void};
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ #[allow(non_camel_case_types)]
+ type vm_size_t = usize;
+ 
+ // Environment.allow_assert and Environment.isMac and !Environment.enable_asan
+ // (`bun_asan` is set via RUSTFLAGS `--cfg=bun_asan` in scripts/build/rust.ts.)
+-pub const ENABLED: bool = cfg!(debug_assertions) && cfg!(target_os = "macos") && !cfg!(bun_asan);
++pub const ENABLED: bool = cfg!(debug_assertions) && cfg!(target_vendor = "apple") && !cfg!(bun_asan);
+ 
+ bun_opaque::opaque_ffi! {
+     /// Opaque FFI handle for a macOS `malloc_zone_t`.
+@@ -34,7 +34,7 @@
+     /// `name` must point to a NUL-terminated C string that remains valid for
+     /// the entire process lifetime — `malloc_set_zone_name` stores the pointer
+     /// (does not copy).
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub unsafe fn init(name: *const c_char) -> &'static Zone {
+         // SAFETY: malloc_create_zone is safe to call with (0, 0); returns a
+         // process-lifetime zone pointer. Caller guarantees `name` outlives the
+@@ -45,7 +45,7 @@
+             &*zone
+         }
+     }
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(target_vendor = "apple"))]
+     #[allow(clippy::missing_safety_doc)]
+     pub unsafe fn init(_name: *const c_char) -> &'static Zone {
+         unreachable!("heap_breakdown is macOS-only; guard call sites on ENABLED")
+@@ -67,9 +67,9 @@
+     }
+ }
+ 
+-// macOS-only libmalloc symbols, kept here (gated on `target_os = "macos"`)
++// macOS-only libmalloc symbols, kept here (gated on `target_vendor = "apple"`)
+ // since heap_breakdown is their only consumer.
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ unsafe extern "C" {
+     /// No preconditions; allocates a new zone (process-lifetime).
+     pub(crate) safe fn malloc_create_zone(start_size: vm_size_t, flags: c_uint) -> *mut Zone;
+@@ -85,7 +85,7 @@
+ 
+ // Non-macOS stubs so cross-platform call sites guarded by `if ENABLED { … }`
+ // (where `ENABLED` is a `const false`) still type-check. Never executed.
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(target_vendor = "apple"))]
+ #[allow(clippy::missing_safety_doc)]
+ mod stubs {
+     use super::*;
+@@ -96,5 +96,5 @@
+         unreachable!()
+     }
+ }
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(target_vendor = "apple"))]
+ pub use stubs::{malloc_zone_free, malloc_zone_malloc};
+--- a/src/bun_alloc/lib.rs
++++ b/src/bun_alloc/lib.rs
+@@ -259,11 +259,11 @@
+         // `check-all` target including Windows) stays on mimalloc.
+         #[cfg(all(bun_asan, target_os = "linux"))]
+         return unsafe { libc::malloc_usable_size(ptr.cast_mut()) };
+-        #[cfg(all(bun_asan, target_os = "macos"))]
++        #[cfg(all(bun_asan, target_vendor = "apple"))]
+         return unsafe { libc::malloc_size(ptr) };
+         // SAFETY: caller guarantees `ptr` is a live mimalloc allocation (the
+         // non-null check above already handled null).
+-        #[cfg(not(any(all(bun_asan, target_os = "linux"), all(bun_asan, target_os = "macos"))))]
++        #[cfg(not(any(all(bun_asan, target_os = "linux"), all(bun_asan, target_vendor = "apple"))))]
+         return unsafe { crate::mimalloc::mi_usable_size(ptr) };
+     }
+ }
+--- a/src/bun_core/Global.rs
++++ b/src/bun_core/Global.rs
+@@ -589,7 +589,7 @@
+             let _ = libc::prctl(libc::PR_SET_NAME, name.as_ptr() as usize);
+         }
+     }
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     {
+         // SAFETY: macOS pthread_setname_np takes the current thread implicitly.
+         unsafe {
+@@ -683,7 +683,7 @@
+     #[cfg(unix)]
+     #[link_name = "exit"]
+     safe fn libc_exit(code: c_int) -> !;
+-    #[cfg(all(unix, not(target_os = "macos")))]
++    #[cfg(all(unix, not(target_vendor = "apple")))]
+     safe fn quick_exit(code: c_int) -> !;
+ }
+ 
+@@ -700,7 +700,7 @@
+     // Flush output before exiting to ensure all messages are visible
+     Output::flush();
+ 
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     {
+         libc_exit(code as i32)
+     }
+@@ -721,7 +721,7 @@
+         let _ = code;
+         unreachable!("no process exit on wasm")
+     }
+-    #[cfg(not(any(target_os = "macos", windows, all(target_family = "wasm", not(unix)))))]
++    #[cfg(not(any(target_vendor = "apple", windows, all(target_family = "wasm", not(unix)))))]
+     {
+         if env::ENABLE_ASAN {
+             libc_exit(code as i32);
+--- a/src/bun_core/env.rs
++++ b/src/bun_core/env.rs
+@@ -18,7 +18,7 @@
+ 
+ const IS_WASM: bool = matches!(BUILD_TARGET, BuildTarget::Wasm);
+ pub const IS_NATIVE: bool = matches!(BUILD_TARGET, BuildTarget::Native);
+-const IS_MAC: bool = IS_NATIVE && cfg!(target_os = "macos");
++const IS_MAC: bool = IS_NATIVE && cfg!(target_vendor = "apple");
+ pub(crate) const IS_BROWSER: bool = IS_WASM;
+ pub const IS_WINDOWS: bool = cfg!(windows);
+ pub(crate) const IS_POSIX: bool = !IS_WINDOWS && !IS_WASM;
+--- a/src/bun_core/lib.rs
++++ b/src/bun_core/lib.rs
+@@ -2661,13 +2661,13 @@
+     #[cfg(any(
+         target_os = "linux",
+         target_os = "android",
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "freebsd"
+     ))]
+     // SAFETY: C POD (integer/array/raw-pointer fields only); all-zero is valid.
+     unsafe impl Zeroable for libc::statfs {}
+     #[cfg(any(
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "freebsd",
+         target_os = "openbsd",
+@@ -2675,7 +2675,7 @@
+     ))]
+     // SAFETY: C POD (integer/array/raw-pointer fields only); all-zero is valid.
+     unsafe impl Zeroable for libc::kevent {}
+-    #[cfg(any(target_os = "macos", target_os = "ios"))]
++    #[cfg(any(target_vendor = "apple", target_os = "ios"))]
+     // SAFETY: C POD (integer/array/raw-pointer fields only); all-zero is valid.
+     unsafe impl Zeroable for libc::kevent64_s {}
+     #[cfg(target_os = "freebsd")]
+@@ -2779,7 +2779,7 @@
+         unsafe extern "C" {
+             #[cfg_attr(
+                 any(
+-                    target_os = "macos",
++                    target_vendor = "apple",
+                     target_os = "ios",
+                     target_os = "freebsd",
+                     target_os = "dragonfly"
+@@ -2792,7 +2792,7 @@
+                 all(
+                     unix,
+                     not(any(
+-                        target_os = "macos",
++                        target_vendor = "apple",
+                         target_os = "ios",
+                         target_os = "freebsd",
+                         target_os = "dragonfly",
+--- a/src/bun_core/result.rs
++++ b/src/bun_core/result.rs
+@@ -41,7 +41,7 @@
+     /// duplicating the per-OS string tables.
+     #[inline]
+     pub fn get_by_name(name: &str) -> Option<&'static str> {
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+         if let Some(s) = DELTA.get(name.as_bytes()) {
+             return Some(*s);
+         }
+@@ -189,7 +189,7 @@
+ 
+     // macOS DELTA: overrides where Apple's strerror() text diverges from glibc,
+     // plus macOS-only errnos (EBADARCH, EBADMACHO, EPWROFF, …).
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     crate::comptime_string_map! {
+     static DELTA: &'static str = {
+         "EADDRNOTAVAIL" => "Can't assign requested address",
+--- a/src/bun_core/thread_id.rs
++++ b/src/bun_core/thread_id.rs
+@@ -32,7 +32,7 @@
+ pub type ThreadId = u32;
+ 
+ #[cfg(any(
+-    target_os = "macos",
++    target_vendor = "apple",
+     target_os = "ios",
+     target_os = "watchos",
+     target_os = "tvos",
+@@ -50,7 +50,7 @@
+     target_os = "haiku",
+     target_os = "wasi",
+     target_os = "windows",
+-    target_os = "macos",
++    target_vendor = "apple",
+     target_os = "ios",
+     target_os = "watchos",
+     target_os = "tvos",
+@@ -99,7 +99,7 @@
+         return unsafe { libc::gettid() } as ThreadId;
+     }
+     #[cfg(any(
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "watchos",
+         target_os = "tvos",
+@@ -166,7 +166,7 @@
+         target_os = "openbsd",
+         target_os = "dragonfly",
+         target_os = "windows",
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "watchos",
+         target_os = "tvos",
+--- a/src/bun_core/util.rs
++++ b/src/bun_core/util.rs
+@@ -1255,7 +1255,7 @@
+         }
+         return n;
+     }
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     {
+         let _ = cap;
+         // SAFETY: F_GETPATH expects buf with at least MAXPATHLEN bytes; callers
+@@ -1302,7 +1302,7 @@
+     #[cfg(not(any(
+         target_os = "linux",
+         target_os = "android",
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "freebsd"
+     )))]
+     {
+@@ -2695,7 +2695,7 @@
+             filled += rc as usize;
+         }
+     }
+-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
++    #[cfg(any(target_vendor = "apple", target_os = "ios", target_os = "freebsd"))]
+     {
+         // getentropy caps at 256 bytes per call.
+         for chunk in bytes.chunks_mut(256) {
+@@ -4676,7 +4676,7 @@
+         };
+         // macOS: Apple's posix_spawnp is a kernel fast-path (no fork); keep it
+         // for the non-PTY inherit case. PTY spawns go through spawn_sys.
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         let pid: libc::pid_t = {
+             // StdinBehavior::Ignore → file action opening /dev/null onto fd 0;
+             // stdout/stderr stay inherited.
+@@ -4754,7 +4754,7 @@
+         #[cfg(not(any(
+             target_os = "linux",
+             target_os = "freebsd",
+-            target_os = "macos",
++            target_vendor = "apple",
+             target_os = "android",
+         )))]
+         let pid: libc::pid_t = {
+--- a/src/errno/lib.rs
++++ b/src/errno/lib.rs
+@@ -175,9 +175,9 @@
+     };
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ pub mod darwin_errno;
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ pub use darwin_errno::*;
+ #[cfg(target_os = "freebsd")]
+ pub mod freebsd_errno;
+@@ -211,7 +211,7 @@
+     #[cfg(any(target_os = "linux", target_os = "android"))]
+     pub type mode_t = u32;
+     /// Darwin/FreeBSD `mode_t` == `__uint16_t` in `<sys/types.h>`.
+-    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++    #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+     pub type mode_t = u16;
+ 
+     /// Kernel errno enum. `E` and `SystemErrno` share the exact same
+@@ -420,7 +420,7 @@
+             assert_eq!(SystemErrno::init(11), Some(SystemErrno::EAGAIN));
+             assert_eq!(SystemErrno::init(104), Some(SystemErrno::ECONNRESET));
+         }
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+         {
+             assert_eq!(SystemErrno::init(11), Some(SystemErrno::EDEADLK));
+             assert_eq!(SystemErrno::init(35), Some(SystemErrno::EAGAIN));
+@@ -463,7 +463,7 @@
+             assert_eq!(system_errno_name(-3008), Some("UV_EAI_NONAME"));
+             assert_eq!(system_errno_name(-5000), None);
+         }
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             assert_eq!(system_errno_name(106), Some("EQFULL"));
+             assert_eq!(system_errno_name(107), Some("EUNKNOWN"));
+@@ -560,7 +560,7 @@
+             coreutils_error_map::get(11),
+             Some("Resource temporarily unavailable")
+         );
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+         assert_eq!(
+             coreutils_error_map::get(11),
+             Some("Resource deadlock avoided")
+--- a/src/perf/lib.rs
++++ b/src/perf/lib.rs
+@@ -12,11 +12,11 @@
+ 
+ pub use crate::generated_perf_trace_events::PerfEvent;
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ pub(crate) type EnabledImpl = Darwin;
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ pub(crate) type EnabledImpl = Linux;
+-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++#[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+ pub(crate) type EnabledImpl = Disabled;
+ 
+ pub enum Ctx {
+@@ -53,7 +53,7 @@
+ static IS_ENABLED_ONCE: Once = Once::new();
+ static IS_ENABLED: AtomicBool = AtomicBool::new(false);
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ fn is_enabled_on_mac_os_once() {
+     if bun_core::env_var::DYLD_ROOT_PATH.platform_get().is_some()
+         || bun_core::env_var::feature_flag::BUN_INSTRUMENTS
+@@ -75,7 +75,7 @@
+ }
+ 
+ fn is_enabled_once() {
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     {
+         is_enabled_on_mac_os_once();
+         if Darwin::get().is_none() {
+@@ -109,7 +109,7 @@
+         return Ctx::Disabled(Disabled);
+     }
+ 
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     {
+         return Ctx::Enabled(Darwin::init(event as i32));
+     }
+@@ -117,17 +117,17 @@
+     {
+         return Ctx::Enabled(Linux::init(event));
+     }
+-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++    #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+     {
+         let _ = event;
+         return Ctx::Disabled(Disabled);
+     }
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ pub use darwin_impl::Darwin;
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ mod darwin_impl {
+     use super::*;
+     use bun_sys::darwin::OSLog;
+--- a/src/sys/PosixStat.rs
++++ b/src/sys/PosixStat.rs
+@@ -138,7 +138,7 @@
+         }
+     }
+     #[cfg(any(
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "freebsd",
+         target_os = "openbsd",
+@@ -153,7 +153,7 @@
+     }
+     #[cfg(not(any(
+         windows,
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "freebsd",
+         target_os = "openbsd",
+--- a/src/sys/copy_file.rs
++++ b/src/sys/copy_file.rs
+@@ -89,7 +89,7 @@
+ ) -> CopyFileReturnType {
+     #[cfg(not(any(target_os = "linux", target_os = "android")))]
+     let _ = copy_file_state;
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     {
+         unsafe extern "C" {
+             // safe: by-value `c_int` fds + `u32` flags; bad fd → `EBADF`/
+--- a/src/sys/fd.rs
++++ b/src/sys/fd.rs
+@@ -1,4 +1,4 @@
+-#[cfg(any(target_os = "macos", windows))]
++#[cfg(any(target_vendor = "apple", windows))]
+ use core::ffi::c_int;
+ #[cfg(windows)]
+ use core::ffi::c_void;
+@@ -130,7 +130,7 @@
+                     _ => None,
+                 }
+             }
+-            #[cfg(target_os = "macos")]
++            #[cfg(target_vendor = "apple")]
+             {
+                 debug_assert!(self.native() >= 0);
+                 match sys::get_errno(close_nocancel(self.native())) {
+@@ -295,7 +295,7 @@
+ // ──────────────────────────────────────────────────────────────────────────
+ // Platform helpers (Windows libuv / macOS close_nocancel).
+ // ──────────────────────────────────────────────────────────────────────────
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ unsafe extern "C" {
+     // Darwin libc: close that doesn't get interrupted by pthread cancellation.
+     // By-value `c_int` only; bad fd → `EBADF`, no UB.
+--- a/src/sys/lib.rs
++++ b/src/sys/lib.rs
+@@ -117,7 +117,7 @@
+ ///
+ /// SAFETY precondition: `buf` must be writable for `len` bytes and `basep`
+ /// must point to a valid `i64`.
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ pub unsafe fn getdirentries64(fd: Fd, buf: *mut u8, len: usize, basep: *mut i64) -> Maybe<usize> {
+     unsafe extern "C" {
+         fn __getdirentries64(
+@@ -147,7 +147,7 @@
+ 
+ pub mod dir_iterator {
+     use super::{EntryKind, Fd, Result};
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(target_vendor = "apple"))]
+     use super::{Error, Tag};
+     use bun_paths::OSPathChar;
+ 
+@@ -306,7 +306,7 @@
+             // DT_WHT (14) — Darwin/FreeBSD union-mount whiteout. The `libc`
+             // crate omits this constant on both Apple and FreeBSD targets;
+             // literal matches <sys/dirent.h>.
+-            #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++            #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+             14 /* DT_WHT */ => EntryKind::Whiteout,
+             // DT_UNKNOWN: some filesystems (bind mounts, FUSE, NFS) don't
+             // provide d_type. Callers should lstatat() to resolve when needed.
+@@ -386,7 +386,7 @@
+     }
+ 
+     // ── macOS ────────────────────────────────────────────────────────────
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     struct State {
+         buf: AlignedBuf,
+         seek: i64,
+@@ -394,7 +394,7 @@
+         end_index: usize,
+         received_eof: bool,
+     }
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     impl State {
+         #[inline]
+         fn new() -> State {
+@@ -1082,11 +1082,11 @@
+ impl RenameMode {
+     /// The `renameat2(2)` / `renameatx_np` flag.
+     #[inline]
+-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
++    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+     fn int(self) -> u32 {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         let (exchange, no_replace) = (2, 4); // <sys/stdio.h>: RENAME_SWAP, RENAME_EXCL
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         let (exchange, no_replace) = (libc::RENAME_EXCHANGE as u32, libc::RENAME_NOREPLACE as u32);
+         match self {
+             RenameMode::Normal => 0,
+@@ -1190,19 +1190,19 @@
+     pub const NOCTTY: i32 = 0;
+     #[cfg(windows)]
+     pub const ACCMODE: i32 = 3;
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub const SYMLINK: i32 = libc::O_SYMLINK;
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(target_vendor = "apple"))]
+     pub const SYMLINK: i32 = 0;
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub const EVTONLY: i32 = libc::O_EVTONLY;
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(target_vendor = "apple"))]
+     pub const EVTONLY: i32 = 0;
+     // Darwin-only: fail with ELOOP if *any* path component is a symlink, not
+     // just the final one like O_NOFOLLOW. 0 elsewhere so the bit-or is a no-op.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub const NOFOLLOW_ANY: i32 = libc::O_NOFOLLOW_ANY;
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(target_vendor = "apple"))]
+     pub const NOFOLLOW_ANY: i32 = 0;
+ }
+ // ──────────────────────────────────────────────────────────────────────────
+@@ -1309,7 +1309,7 @@
+     pub const write: Tag = Tag(48);
+     pub(crate) const getcwd: Tag = Tag(49);
+     pub const chdir: Tag = Tag(51);
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub(crate) const fcopyfile: Tag = Tag(52);
+     pub const recv: Tag = Tag(53);
+     pub const send: Tag = Tag(54);
+@@ -1551,7 +1551,7 @@
+         ) -> c_int;
+         // BSD/Linux event-queue / notification syscalls — all by-value scalars;
+         // bad args → errno (`EINVAL`/`EMFILE`/…), never UB.
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+         pub(crate) safe fn kqueue() -> c_int;
+         #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
+         pub(crate) safe fn eventfd(initval: libc::c_uint, flags: c_int) -> c_int;
+@@ -1595,7 +1595,7 @@
+ // — the plain libc symbols are pthread cancellation points; a cancelled thread
+ // torn down mid-syscall leaks fds / corrupts state. Bun always uses the
+ // non-cancellable variants on macOS (`bun.darwin.nocancel`).
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ mod nocancel {
+     use core::ffi::c_int;
+     unsafe extern "C" {
+@@ -1686,13 +1686,13 @@
+     #[cfg(not(any(target_os = "linux", target_os = "android")))]
+     #[inline]
+     unsafe fn sys_openat(d: i32, p: *const libc::c_char, f: i32, m: libc::c_uint) -> i32 {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `p` is a valid
+             // NUL-terminated path and `d` is a live dir fd (or AT_FDCWD).
+             unsafe { super::nocancel::openat(d, p, f, m) }
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `p` is a valid
+             // NUL-terminated path and `d` is a live dir fd (or AT_FDCWD).
+@@ -1702,13 +1702,13 @@
+     #[cfg(not(any(target_os = "linux", target_os = "android")))]
+     #[inline]
+     unsafe fn sys_read(fd: i32, buf: *mut libc::c_void, n: usize) -> isize {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // writable bytes and `fd` is a live descriptor.
+             unsafe { super::nocancel::read(fd, buf, n) }
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // writable bytes and `fd` is a live descriptor.
+@@ -1718,13 +1718,13 @@
+     #[cfg(not(any(target_os = "linux", target_os = "android")))]
+     #[inline]
+     unsafe fn sys_write(fd: i32, buf: *const libc::c_void, n: usize) -> isize {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // readable bytes and `fd` is a live descriptor.
+             unsafe { super::nocancel::write(fd, buf, n) }
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // readable bytes and `fd` is a live descriptor.
+@@ -1734,13 +1734,13 @@
+     #[cfg(not(any(target_os = "linux", target_os = "android")))]
+     #[inline]
+     unsafe fn sys_pread(fd: i32, buf: *mut libc::c_void, n: usize, off: i64) -> isize {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // writable bytes and `fd` is a live descriptor.
+             unsafe { super::nocancel::pread(fd, buf, n, off) }
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // writable bytes and `fd` is a live descriptor.
+@@ -1750,13 +1750,13 @@
+     #[cfg(not(any(target_os = "linux", target_os = "android")))]
+     #[inline]
+     unsafe fn sys_pwrite(fd: i32, buf: *const libc::c_void, n: usize, off: i64) -> isize {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // readable bytes and `fd` is a live descriptor.
+             unsafe { super::nocancel::pwrite(fd, buf, n, off) }
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // readable bytes and `fd` is a live descriptor.
+@@ -1765,7 +1765,7 @@
+     }
+     #[inline]
+     unsafe fn sys_recv(fd: i32, buf: *mut libc::c_void, n: usize, flags: i32) -> isize {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // writable bytes and `fd` is a live socket.
+@@ -1780,7 +1780,7 @@
+                 )
+             }
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // writable bytes and `fd` is a live socket.
+@@ -1789,13 +1789,13 @@
+     }
+     #[inline]
+     unsafe fn sys_send(fd: i32, buf: *const libc::c_void, n: usize, flags: i32) -> isize {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // readable bytes and `fd` is a live socket.
+             unsafe { super::nocancel::sendto(fd, buf, n, flags, core::ptr::null(), 0) }
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         {
+             // SAFETY: caller contract (`unsafe fn`) — `buf` points to `n`
+             // readable bytes and `fd` is a live socket.
+@@ -1866,7 +1866,7 @@
+         let dir = dir.as_fd();
+         let flags = flags | O::CLOEXEC;
+         // macOS: `openat$NOCANCEL`, retried on EINTR.
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             let rc = check_p!(
+                 // SAFETY: `dir` is a live fd (or AT_FDCWD); `ZStr::as_ptr()` is
+@@ -1882,7 +1882,7 @@
+             super::linux_syscall::openat(dir, path, flags, mode)
+                 .map_err(|e| Error::from_code_int(e, Tag::open).with_path(path.as_bytes()))
+         }
+-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++        #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+         {
+             let rc = check_p!(
+                 unsafe { sys_openat(dir.native(), path.as_ptr(), flags, mode as libc::c_uint) },
+@@ -1955,9 +1955,9 @@
+         }
+         #[cfg(not(any(target_os = "linux", target_os = "android")))]
+         {
+-            #[cfg(target_os = "macos")]
++            #[cfg(target_vendor = "apple")]
+             let rc = super::nocancel::close(fd.native());
+-            #[cfg(not(target_os = "macos"))]
++            #[cfg(not(target_vendor = "apple"))]
+             let rc = safe_libc::close(fd.native());
+             if rc < 0 && last_errno() == libc::EBADF {
+                 return Err(Error::from_code_int(libc::EBADF, Tag::close).with_fd(fd));
+@@ -1968,7 +1968,7 @@
+     pub fn read(fd: Fd, buf: &mut [u8]) -> Maybe<usize> {
+         let len = buf.len().min(MAX_COUNT);
+         // macOS: `read$NOCANCEL`, retried on EINTR.
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             let n = check!(
+                 // SAFETY: `fd` is a live descriptor; `buf` is valid for `len` writes.
+@@ -1982,7 +1982,7 @@
+             super::linux_syscall::read(fd, &mut buf[..len])
+                 .map_err(|e| Error::from_code_int(e, Tag::read))
+         }
+-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++        #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+         {
+             let n = check!(
+                 unsafe { sys_read(fd.native(), buf.as_mut_ptr().cast(), len) },
+@@ -1994,7 +1994,7 @@
+     pub fn write(fd: Fd, buf: &[u8]) -> Maybe<usize> {
+         let len = buf.len().min(MAX_COUNT);
+         // macOS: `write$NOCANCEL`, retried on EINTR.
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             let n = check!(
+                 // SAFETY: `fd` is a live descriptor; `buf` is valid for `len` reads.
+@@ -2008,7 +2008,7 @@
+             super::linux_syscall::write(fd, &buf[..len])
+                 .map_err(|e| Error::from_code_int(e, Tag::write))
+         }
+-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++        #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+         {
+             let n = check!(
+                 unsafe { sys_write(fd.native(), buf.as_ptr().cast(), len) },
+@@ -2489,7 +2489,7 @@
+             );
+             return Ok(());
+         }
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         {
+             unsafe extern "C" {
+                 fn renameatx_np(
+@@ -2516,7 +2516,7 @@
+             );
+             return Ok(());
+         }
+-        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
++        #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+         {
+             if mode != RenameMode::Normal {
+                 return Err(
+@@ -2634,7 +2634,7 @@
+                 // SAFETY: `filled` passes `size` writable bytes, or null and 0.
+                 unsafe { libc::flistxattr(fd, list.cast(), size) }
+             }
+-            #[cfg(target_os = "macos")]
++            #[cfg(target_vendor = "apple")]
+             {
+                 // SAFETY: `filled` passes `size` writable bytes, or null and 0.
+                 unsafe { libc::flistxattr(fd, list.cast(), size, 0) }
+@@ -2678,7 +2678,7 @@
+                     // SAFETY: `name` ends with a NUL. `filled` passes `size` writable bytes, or null and 0.
+                     unsafe { libc::fgetxattr(fd, name, value, size) }
+                 }
+-                #[cfg(target_os = "macos")]
++                #[cfg(target_vendor = "apple")]
+                 {
+                     // SAFETY: `name` ends with a NUL. `filled` passes `size` writable bytes, or null and 0.
+                     unsafe { libc::fgetxattr(fd, name, value, size, 0, 0) }
+@@ -2852,7 +2852,7 @@
+     }
+     /// `lchmod` is BSD/Darwin-only; Linux: `fchmodat(.., AT_SYMLINK_NOFOLLOW)`.
+     pub fn lchmod(path: &ZStr, mode: Mode) -> Maybe<()> {
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+         {
+             // The `libc` crate omits the `lchmod` binding on both Darwin
+             // (libSystem since 10.5) and FreeBSD (libc since 3.0). Declare
+@@ -2868,7 +2868,7 @@
+             );
+             Ok(())
+         }
+-        #[cfg(not(any(target_os = "macos", target_os = "freebsd")))]
++        #[cfg(not(any(target_vendor = "apple", target_os = "freebsd")))]
+         {
+             const SYS_FCHMODAT2: libc::c_long = 452;
+             loop {
+@@ -3029,12 +3029,12 @@
+     /// `realpath` — `realpath$DARWIN_EXTSN` on macOS for proper symlink resolution
+     /// Writes into `buf` and returns the written slice.
+     pub fn realpath<'a>(path: &ZStr, buf: &'a mut bun_core::PathBuffer) -> Maybe<&'a [u8]> {
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         unsafe extern "C" {
+             #[link_name = "realpath$DARWIN_EXTSN"]
+             fn _realpath(path: *const i8, resolved: *mut i8) -> *mut i8;
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         use libc::realpath as _realpath;
+         // SAFETY: `path` is NUL-terminated (`ZStr`); `buf` is a `PathBuffer`
+         // (>= PATH_MAX bytes) which `realpath` requires for the resolved path.
+@@ -3109,13 +3109,13 @@
+     pub(crate) fn recv(fd: Fd, buf: &mut [u8], flags: i32) -> Maybe<usize> {
+         let len = buf.len().min(MAX_COUNT);
+         // macOS: `recvfrom$NOCANCEL`, retried on EINTR.
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         let n = check!(
+             // SAFETY: `fd` is a live socket; `buf` is valid for `len` writes.
+             unsafe { sys_recv(fd.native(), buf.as_mut_ptr().cast(), len, flags) },
+             Tag::recv
+         );
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         let n = check!(
+             // SAFETY: `fd` is a live socket; `buf[..len]` is a valid exclusive
+             // slice and `len <= buf.len()` (clamped above).
+@@ -3128,13 +3128,13 @@
+         // `buf.len` is passed un-clamped (only `recv` clamps);
+         // forward the full length and let the kernel decide.
+         // macOS: `sendto$NOCANCEL`, retried on EINTR.
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         let n = check!(
+             // SAFETY: `fd` is a live socket; `buf` is valid for `buf.len()` reads.
+             unsafe { sys_send(fd.native(), buf.as_ptr().cast(), buf.len(), flags) },
+             Tag::send
+         );
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(target_vendor = "apple"))]
+         let n = check!(
+             // SAFETY: `fd` is a live socket; `buf` is a valid shared slice of
+             // `buf.len()` readable bytes.
+@@ -3153,9 +3153,9 @@
+     }
+     pub(crate) const MSG_DONTWAIT: i32 = libc::MSG_DONTWAIT;
+     /// XNU's `sosend` only honours `MSG_NBIO` (private, 0x20000) for "don't wait for buffer space"; `MSG_DONTWAIT` alone still blocks there.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     const MSG_NBIO: i32 = 0x20000;
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(target_vendor = "apple"))]
+     const MSG_NBIO: i32 = 0;
+     pub(crate) const SEND_FLAGS_NONBLOCK: i32 = libc::MSG_DONTWAIT | MSG_NBIO | libc::MSG_NOSIGNAL;
+     /// `fcntl(F_GETFD)` then OR in `FD_CLOEXEC`.
+@@ -3223,7 +3223,7 @@
+             }
+             // Darwin: SO_NOSIGPIPE on both fds — unless `for_shell`, in which
+             // case bump RCVBUF/SNDBUF instead.
+-            #[cfg(target_os = "macos")]
++            #[cfg(target_vendor = "apple")]
+             {
+                 if for_shell {
+                     let so_recvbuf: libc::c_int = 1024 * 128;
+@@ -3291,7 +3291,7 @@
+     }
+ 
+     // ── macOS clonefile / copyfile ──
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     mod darwin_copy {
+         use super::*;
+         unsafe extern "C" {
+@@ -3366,7 +3366,7 @@
+             Ok(())
+         }
+     }
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub use darwin_copy::{
+         clonefile_ as clonefile, clonefileat_ as clonefileat, copyfile_ as copyfile,
+         fcopyfile_ as fcopyfile,
+@@ -4519,7 +4519,7 @@
+         // SAFETY: `PlatformIoVecConst` is layout-compatible with `libc::iovec`
+         // (asserted above); `pwritev(2)` only reads through `iov_base`.
+         // Darwin uses `pwritev$NOCANCEL` (avoid cancellation point).
+-        #[cfg(target_os = "macos")]
++        #[cfg(target_vendor = "apple")]
+         loop {
+             // macOS: `pwritev$NOCANCEL`, retried on EINTR.
+             // SAFETY: `fd` is a live descriptor; `vecs` gives an exact
+@@ -4549,7 +4549,7 @@
+             }
+             .map_err(|e| Error::from_code_int(e, Tag::pwritev));
+         }
+-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++        #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+         loop {
+             let rc = unsafe {
+                 libc::pwritev(
+@@ -4655,7 +4655,7 @@
+ /// (macOS uses `writev$NOCANCEL`).
+ #[cfg(unix)]
+ pub fn writev(fd: Fd, vecs: &[PlatformIoVec]) -> Maybe<usize> {
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     loop {
+         // SAFETY: `PlatformIoVec` is `libc::iovec`; writev(2) only reads
+         // the descriptor table. `writev$NOCANCEL`, retried on EINTR.
+@@ -4676,7 +4676,7 @@
+         return unsafe { linux_syscall::writev(fd, vecs.as_ptr(), vecs.len()) }
+             .map_err(|e| Error::from_code_int(e, Tag::writev).with_fd(fd));
+     }
+-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++    #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+     loop {
+         // SAFETY: see above.
+         let rc =
+@@ -4700,7 +4700,7 @@
+     if vecs.is_empty() {
+         bun_core::debug_warn!("readv() called with 0 length buffer");
+     }
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     loop {
+         // SAFETY: vecs.ptr is `*const iovec`; the kernel writes through
+         // each `iov_base`, never the array itself. `readv$NOCANCEL`,
+@@ -4722,7 +4722,7 @@
+         return unsafe { linux_syscall::readv(fd, vecs.as_ptr(), vecs.len()) }
+             .map_err(|e| Error::from_code_int(e, Tag::readv).with_fd(fd));
+     }
+-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++    #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+     loop {
+         // SAFETY: see above.
+         let rc = unsafe { libc::readv(fd.native(), vecs.as_ptr(), vecs.len() as core::ffi::c_int) };
+@@ -4745,7 +4745,7 @@
+     if vecs.is_empty() {
+         bun_core::debug_warn!("preadv() called with 0 length buffer");
+     }
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     loop {
+         // SAFETY: see `readv`. `preadv$NOCANCEL`, retried on EINTR.
+         let rc = unsafe {
+@@ -4771,7 +4771,7 @@
+         return unsafe { linux_syscall::preadv(fd, vecs.as_ptr(), vecs.len(), position) }
+             .map_err(|e| Error::from_code_int(e, Tag::preadv).with_fd(fd));
+     }
+-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
++    #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+     loop {
+         // SAFETY: see `readv`.
+         let rc = unsafe {
+@@ -4816,12 +4816,12 @@
+ /// unsuffixed `statfs` already writes the 64-bit-inode layout).
+ #[cfg(unix)]
+ pub fn statfs(path: &ZStr) -> Maybe<StatFS> {
+-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
++    #[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
+     unsafe extern "C" {
+         #[link_name = "statfs64"]
+         fn _statfs(path: *const core::ffi::c_char, buf: *mut libc::statfs) -> core::ffi::c_int;
+     }
+-    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
++    #[cfg(not(all(target_vendor = "apple", target_arch = "x86_64")))]
+     use libc::statfs as _statfs;
+     loop {
+         // SAFETY: all-zero is a valid `struct statfs` (kernel writes every
+@@ -4961,7 +4961,7 @@
+ 
+ // ── `bun.c` — raw libc surface (no `Maybe` wrapping). ──
+ pub mod c {
+-    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++    #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+     use core::ffi::c_int;
+     #[cfg(unix)]
+     use core::ffi::{c_char, c_void};
+@@ -4979,7 +4979,7 @@
+     #[cfg(unix)]
+     pub use super::UTIME_NOW;
+     #[cfg(any(
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "freebsd",
+         target_os = "dragonfly",
+@@ -5011,7 +5011,7 @@
+     // `@cImport` of system headers. The `libc` crate already binds all of
+     // these; re-export so callers (`node_os.rs`, `node_fs.rs`, …) keep a
+     // single `bun_sys::c::*` import path matching the `bun.c` namespacing.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub use libc::{
+         _NSGetEnviron,
+         COPYFILE_ACL,
+@@ -5076,14 +5076,14 @@
+     /// Safe rc-returning `clonefile(2)` — callers that want their own
+     /// `sys::Tag` / path boxing (`errno_sys_p`) take the raw `c_int` instead
+     /// of the `Maybe<()>`-shaped [`super::clonefile`].
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     #[inline]
+     pub fn clonefile_rc(src: &bun_core::ZStr, dst: &bun_core::ZStr, flags: u32) -> c_int {
+         // SAFETY: `&ZStr` guarantees a readable NUL-terminated buffer.
+         unsafe { libc::clonefile(src.as_ptr(), dst.as_ptr(), flags) }
+     }
+     /// Safe rc-returning `copyfile(3)` with a null state handle.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     #[inline]
+     pub fn copyfile_rc(
+         src: &bun_core::ZStr,
+@@ -5096,13 +5096,13 @@
+     }
+     /// `PROCESSOR_CPU_LOAD_INFO_COUNT` — sizeof(processor_cpu_load_info)/sizeof(natural_t).
+     /// Not bound by `libc`; <mach/processor_info.h>.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub const PROCESSOR_CPU_LOAD_INFO_COUNT: u32 =
+         (core::mem::size_of::<libc::processor_cpu_load_info>()
+             / core::mem::size_of::<libc::natural_t>()) as u32;
+     /// `<sys/sysctl.h> struct loadavg` — used by `os.loadavg()` via
+     /// `vm.loadavg` sysctl. Not bound by `libc`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     #[repr(C)]
+     #[derive(Clone, Copy)]
+     #[allow(non_camel_case_types)]
+@@ -5111,14 +5111,14 @@
+         pub fscale: core::ffi::c_long,
+     }
+     // SAFETY: integers only; all-zero is valid pre-`sysctl` state.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     unsafe impl bun_core::ffi::Zeroable for struct_loadavg {}
+ 
+     // ── <mach/mach_init.h> / <mach-o/dyld.h> — declared directly because the
+     // `libc` crate has deprecated these in favour of the `mach2` crate. We
+     // bind the C symbols ourselves so the workspace
+     // stays free of an extra dependency and of deprecation noise.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     unsafe extern "C" {
+         /// `extern mach_port_t mach_task_self_` — the task's send right,
+         /// cached by libsystem at startup. `mach_task_self()` in C is a macro
+@@ -5137,14 +5137,14 @@
+         safe fn dyld_get_image_header_raw(image_index: u32) -> *const core::ffi::c_void;
+     }
+     /// `mach_task_self()` — C macro `#define mach_task_self() mach_task_self_`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     #[inline]
+     pub fn mach_task_self() -> libc::mach_port_t {
+         mach_task_self_
+     }
+     /// `_dyld_get_image_header(i)` — on 64-bit Darwin every loaded image is
+     /// 64-bit, so present it as `*const mach_header_64`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     #[inline]
+     pub fn _dyld_get_image_header(image_index: u32) -> *const super::macho::mach_header_64 {
+         dyld_get_image_header_raw(image_index).cast()
+@@ -5155,7 +5155,7 @@
+     /// bytes-sent count back through `*len` before returning -1 — callers MUST
+     /// advance their offset by `*len` even on error. This wrapper is raw (no
+     /// EINTR retry); the caller owns the offset bookkeeping.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub unsafe fn sendfile(
+         fd: c_int,
+         s: c_int,
+@@ -5184,7 +5184,7 @@
+     // ── Darwin libproc — process introspection (`<libproc.h>`). ──
+     /// `struct proc_bsdinfo` (PROC_PIDTBSDINFO flavour). Fields match the SDK
+     /// header; only `pbi_ppid` is currently consumed.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     #[repr(C)]
+     pub struct struct_proc_bsdinfo {
+         pub pbi_flags: u32,
+@@ -5211,11 +5211,11 @@
+         pub pbi_start_tvusec: u64,
+     }
+     // SAFETY: integers + byte arrays only; all-zero is valid pre-`proc_pidinfo` state.
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     unsafe impl bun_core::ffi::Zeroable for struct_proc_bsdinfo {}
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     pub const PROC_PIDTBSDINFO: c_int = 3;
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     unsafe extern "C" {
+         /// `proc_pidinfo(pid, flavor, arg, buffer, buffersize)` — bytes written or ≤0.
+         pub fn proc_pidinfo(
+@@ -5550,7 +5550,7 @@
+ }
+ 
+ // ── `bun.darwin` — Darwin-only platform surface. ──
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ pub mod darwin {
+     use core::ffi::{c_char, c_void};
+ 
+@@ -5800,7 +5800,7 @@
+         }
+     }
+ }
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(target_vendor = "apple"))]
+ pub mod darwin {}
+ 
+ // ── Mach-O header parsing (subset). ──────────────────────────────────────
+@@ -7405,7 +7405,7 @@
+ }
+ 
+ /// `kqueue()` — BSD kernel event queue (Darwin/FreeBSD only).
+-#[cfg(any(target_os = "macos", target_os = "freebsd"))]
++#[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+ pub fn kqueue() -> Maybe<Fd> {
+     let rc = safe_libc::kqueue();
+     if rc < 0 {
+@@ -7416,7 +7416,7 @@
+ 
+ /// `kevent()` — slice-wrapped Maybe form. Retries on EINTR.
+ /// Returns the number of events written into `eventlist`.
+-#[cfg(any(target_os = "macos", target_os = "freebsd"))]
++#[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+ pub fn kevent(
+     fd: Fd,
+     changelist: &[libc::kevent],
+@@ -7541,7 +7541,7 @@
+             }
+         }
+     }
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     {
+         out.0.fill(0);
+         fcntl(fd, libc::F_GETPATH, out.0.as_mut_ptr() as isize)?;
+@@ -7595,7 +7595,7 @@
+     #[cfg(not(any(
+         target_os = "linux",
+         target_os = "android",
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "freebsd",
+         windows
+     )))]
+@@ -7789,7 +7789,7 @@
+     pub use bun_errno::posix::*;
+     use core::ffi::c_int;
+     #[cfg(any(
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "freebsd",
+         target_os = "dragonfly",
+@@ -7806,7 +7806,7 @@
+     /// "kernel-fillable POD" marker — every impl is integers / raw pointers /
+     /// nested C POD, so any byte pattern the kernel writes is a valid `T`.
+     #[cfg(any(
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "freebsd",
+         target_os = "dragonfly",
+@@ -7842,7 +7842,7 @@
+     /// updated for string MIBs whose output fits — callers reading strings
+     /// should still scan for NUL).
+     #[cfg(any(
+-        target_os = "macos",
++        target_vendor = "apple",
+         target_os = "ios",
+         target_os = "freebsd",
+         target_os = "dragonfly",
+@@ -8023,13 +8023,13 @@
+     ) -> core::result::Result<c_int, super::Error> {
+         loop {
+             // SAFETY: PollFd is layout-identical to libc::pollfd.
+-            #[cfg(target_os = "macos")]
++            #[cfg(target_vendor = "apple")]
+             let rc = unsafe {
+                 super::nocancel::poll(fds.as_mut_ptr().cast(), fds.len() as _, timeout_ms)
+             };
+             // SAFETY: `PollFd` is `repr(C)` and layout-identical to
+             // `libc::pollfd`; `fds` is a valid exclusive slice.
+-            #[cfg(not(target_os = "macos"))]
++            #[cfg(not(target_vendor = "apple"))]
+             let rc = unsafe { libc::poll(fds.as_mut_ptr().cast(), fds.len() as _, timeout_ms) };
+             if rc < 0 {
+                 let e = super::last_errno();
+@@ -8181,7 +8181,7 @@
+     #[repr(C)]
+     #[derive(Copy, Clone)]
+     pub struct sockaddr_in {
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+         pub len: u8,
+         pub family: sa_family_t,
+         pub port: in_port_t,
+@@ -8190,7 +8190,7 @@
+     }
+     impl sockaddr_in {
+         pub const ZEROED: Self = Self {
+-            #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++            #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+             len: core::mem::size_of::<Self>() as u8,
+             family: 0,
+             port: 0,
+@@ -8202,7 +8202,7 @@
+     #[repr(C)]
+     #[derive(Copy, Clone)]
+     pub struct sockaddr_in6 {
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+         pub len: u8,
+         pub family: sa_family_t,
+         pub port: in_port_t,
+@@ -8212,7 +8212,7 @@
+     }
+     impl sockaddr_in6 {
+         pub const ZEROED: Self = Self {
+-            #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++            #[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
+             len: core::mem::size_of::<Self>() as u8,
+             family: 0,
+             port: 0,
+@@ -8422,7 +8422,7 @@
+ 
+     /// Result of [`find_loaded_module`]: the loaded ELF object whose `PT_LOAD`
+     /// segment spans a given address.
+-    #[cfg(not(any(windows, target_os = "macos")))]
++    #[cfg(not(any(windows, target_vendor = "apple")))]
+     pub struct LoadedModule {
+         /// `dlpi_addr` — link-map base address (subtract from the lookup address
+         /// to get an image-relative offset).
+@@ -8435,7 +8435,7 @@
+     /// Walk loaded ELF objects via `dl_iterate_phdr`, returning the one whose
+     /// `PT_LOAD` segment contains `address` (matched by address, so it does not
+     /// depend on how a libc names or orders the main program).
+-    #[cfg(not(any(windows, target_os = "macos")))]
++    #[cfg(not(any(windows, target_vendor = "apple")))]
+     pub fn find_loaded_module(address: usize) -> Option<LoadedModule> {
+         use core::ffi::{c_int, c_void};
+ 
+--- a/src/threading/ThreadPool.rs
++++ b/src/threading/ThreadPool.rs
+@@ -752,11 +752,11 @@
+         let _ = DEFAULT;
+         0x1200000
+     }
+-    #[cfg(all(not(target_os = "macos"), not(windows)))]
++    #[cfg(all(not(target_vendor = "apple"), not(windows)))]
+     {
+         DEFAULT
+     }
+-    #[cfg(target_os = "macos")]
++    #[cfg(target_vendor = "apple")]
+     {
+         // 16384 is the page size on arm64
+         // macOS and a safe multiple of the 4096-byte x64 page size.
+--- a/src/threading/io_thread_pool.rs
++++ b/src/threading/io_thread_pool.rs
+@@ -96,8 +96,8 @@
+     }
+ 
+     // 4 was the sweet spot on macOS. Didn't check the sweet spot on Windows.
+-    #[cfg(any(target_os = "macos", windows))]
++    #[cfg(any(target_vendor = "apple", windows))]
+     return bun_core::get_thread_count() > 3;
+-    #[cfg(not(any(target_os = "macos", windows)))]
++    #[cfg(not(any(target_vendor = "apple", windows)))]
+     return false;
+ }

@@ -1,0 +1,23 @@
+--- a/src/bun_core/util.rs
++++ b/src/bun_core/util.rs
+@@ -2673,8 +2673,19 @@
+ // must use `bun_boringssl_sys::rand_bytes` (userspace DRBG, no syscall per
+ // call).
+ fn os_entropy(bytes: &mut [u8]) {
+-    #[cfg(any(target_os = "linux", target_os = "android"))]
++    // Android's C library has getrandom from API level 28, and a library built for an older level cannot name it:
++    // the kernel's entropy device is what that C library reads too.
++    #[cfg(target_os = "android")]
+     {
++        use std::io::Read;
++        let mut device = std::fs::File::open("/dev/urandom")
++            .unwrap_or_else(|err| panic!("opening /dev/urandom failed: {err}"));
++        device
++            .read_exact(bytes)
++            .unwrap_or_else(|err| panic!("reading /dev/urandom failed: {err}"));
++    }
++    #[cfg(target_os = "linux")]
++    {
+         let mut filled = 0usize;
+         while filled < bytes.len() {
+             // SAFETY: writes at most len-filled bytes into the slice.

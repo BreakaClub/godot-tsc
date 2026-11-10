@@ -41,7 +41,8 @@ export function bunCheckout(source = process.env.BUN_SOURCE ?? DEFAULT_SOURCE) {
 /** Runs the extraction (or its `--verify`). */
 export function vendor({ source, verify = false } = {}) {
   const checkout = bunCheckout(source);
-  const result = spawnSync('python3', [resolve(root, 'scripts/vendor-bun.py'), checkout, ...(verify ? ['--verify'] : [])], { cwd: root, stdio: 'inherit' });
+  // Windows installs of Python have no `python3`.
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', [resolve(root, 'scripts/vendor-bun.py'), checkout, ...(verify ? ['--verify'] : [])], { cwd: root, stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`vendor-bun.py exited ${result.status}`);
 }

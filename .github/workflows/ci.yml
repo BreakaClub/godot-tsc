@@ -36,8 +36,8 @@ jobs:
       - name: Build
         run: pnpm build
 
-  native:
-    name: Native build & compiler tests (macOS arm64)
+  tests:
+    name: Compiler tests (macOS arm64)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -76,64 +76,14 @@ jobs:
       - name: Tests, with the compiler
         run: pnpm test
 
-      # Each run's builds, for trying a commit without building it: kept two weeks.
-      # One file per artifact: a file is stored at the artifact's root, which the package job downloads into out/bin.
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-macos
-          path: out/bin/libgodot_tsc.dylib
-          if-no-files-found: error
-          retention-days: 14
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: godot-tsc-cli-macos
-          path: target/release/godot-tsc-cli
-          if-no-files-found: error
-          retention-days: 14
-
-  web:
-    name: Web side module (stock profile)
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: emscripten-core/setup-emsdk@v16
-        with:
-          version: 4.0.11
-
-      # scripts/vendor-bun.py reads Cargo manifests with tomllib, which Python has from 3.11; the image's is 3.10.
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Rust toolchain (rust-toolchain.toml) with the Emscripten target and the standard library's sources
-        run: |
-          rustup show active-toolchain || rustup toolchain install
-          rustup target add wasm32-unknown-emscripten
-          rustup component add rust-src
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          package-manager-cache: false
-
-      - name: Vendor Bun's crates
-        run: node scripts/vendor.mjs
-
-      - name: Build
-        run: node scripts/build-web.mjs --profile=stock
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-web-stock
-          path: out/bin/godot_tsc.web.stock.wasm
-          if-no-files-found: error
-          retention-days: 14
+  # Every platform's library and the Web side module, each loaded where it can be: kept two weeks, for trying a commit without building it.
+  binaries:
+    name: Binaries
+    uses: ./.github/workflows/build.yml
 
   package:
     name: Package (npm tarball and addon zip)
-    needs: [native, web]
+    needs: binaries
     # macOS, for `lipo`: the staged manifest lists the architectures the macOS library has (scripts/stage-addon.mjs).
     runs-on: macos-latest
     steps:
@@ -168,7 +118,7 @@ jobs:
       - name: Stage, zip and pack
         run: |
           mkdir -p package
-          node scripts/stage-addon.mjs --require-binaries --web-profile=stock
+          node scripts/stage-addon.mjs --require-all-platforms --web-profile=stock
           (cd addon && zip -r ../package/godot-tsc-addon.zip godot-tsc/)
           pnpm pack --pack-destination package
           ls -lah package

@@ -17,7 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ES2022_LIB_ROOTS, libClosure, readLibBundle } from '../node/lib-bundle.mjs';
-import { NATIVE_LIBRARIES, OUT_BIN, parseArguments, root } from './godot-api.mjs';
+import { NATIVE_LIBRARY_NAMES, OUT_BIN, parseArguments, root } from './godot-api.mjs';
 
 const args = parseArguments(process.argv.slice(2), { flags: ['--verify'], values: ['--capture'] });
 const verify = args.flags.has('--verify');
@@ -78,7 +78,7 @@ if (!existsSync(typingsEngine) || readFileSync(typingsEngine, 'utf8') !== engine
 }
 
 // The addon, staged from out/bin and installed by the package's installer.
-if (!existsSync(join(OUT_BIN, NATIVE_LIBRARIES.macos)) && !existsSync(join(OUT_BIN, NATIVE_LIBRARIES.linux)) && !existsSync(join(OUT_BIN, NATIVE_LIBRARIES.windows))) {
+if (!NATIVE_LIBRARY_NAMES.some(library => existsSync(join(OUT_BIN, library)))) {
   throw new Error(`No native library in ${OUT_BIN}: run "pnpm build:native" first`);
 }
 run(process.execPath, ['scripts/stage-addon.mjs']);

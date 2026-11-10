@@ -6,7 +6,8 @@ name: Release
 # Run by hand (Actions > Release > Run workflow, or `gh workflow run release.yml --ref <branch>`), it is a dry run: it makes everything a
 # release would publish and stops there. The tarball and the addon zip are the run's `godot-tsc-release` artifact (`pnpm pack` lists the
 # tarball's files), and `pnpm publish --dry-run` takes that tarball as far as publishing it. Only a pushed tag publishes, whatever ref a run by hand names.
-# Platforms: macOS arm64 natively and the Web side module for stock Godot 4.7 templates (Emscripten 4.0.11), the ones that have been run.
+# Platforms: every one build.yml builds (macOS, Windows, Linux, Android, iOS, and the Web side module for stock Godot 4.7 templates). The
+# release job refuses to pack unless all of them are there.
 on:
   push:
     tags:
@@ -17,77 +18,16 @@ on:
 run-name: ${{ github.event_name == 'push' && format('Release {0}', github.ref_name) || format('Release dry run ({0})', github.ref_name) }}
 
 jobs:
-  build-native:
-    name: Build native (macOS arm64)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Rust toolchain (rust-toolchain.toml)
-        run: rustup show active-toolchain || rustup toolchain install
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          package-manager-cache: false
-
-      - name: Vendor Bun's crates
-        run: node scripts/vendor.mjs
-
-      - name: Build
-        run: node scripts/build-native.mjs
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-macos
-          path: out/bin/libgodot_tsc.dylib
-          if-no-files-found: error
-          # Handed to the release job in the same run; the release keeps what it publishes.
-          retention-days: 1
-
-  build-web:
-    name: Build Web side module (stock profile)
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: emscripten-core/setup-emsdk@v16
-        with:
-          version: 4.0.11
-
-      # scripts/vendor-bun.py reads Cargo manifests with tomllib, which Python has from 3.11; the image's is 3.10.
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Rust toolchain (rust-toolchain.toml) with the Emscripten target and the standard library's sources
-        run: |
-          rustup show active-toolchain || rustup toolchain install
-          rustup target add wasm32-unknown-emscripten
-          rustup component add rust-src
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          package-manager-cache: false
-
-      - name: Vendor Bun's crates
-        run: node scripts/vendor.mjs
-
-      - name: Build
-        run: node scripts/build-web.mjs --profile=stock
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-web-stock
-          path: out/bin/godot_tsc.web.stock.wasm
-          if-no-files-found: error
-          retention-days: 1
+  # Every platform's library and the Web side module, each loaded where it can be (build.yml). Handed to the release job in the same run;
+  # the release keeps what it publishes.
+  binaries:
+    name: Binaries
+    uses: ./.github/workflows/build.yml
+    with:
+      retention-days: 1
 
   release:
-    needs: [build-native, build-web]
+    needs: binaries
     name: "${{ github.event_name == 'push' && 'Pack & GitHub release' || 'Pack (dry run, nothing published)' }}"
     # macOS, for `lipo`: the staged manifest lists the architectures the macOS library has (scripts/stage-addon.mjs).
     runs-on: macos-latest
@@ -129,7 +69,7 @@ jobs:
       - name: Stage the addon
         run: |
           mkdir -p release
-          node scripts/stage-addon.mjs --require-binaries --web-profile=stock
+          node scripts/stage-addon.mjs --require-all-platforms --web-profile=stock
           (cd addon && zip -r ../release/godot-tsc-addon.zip godot-tsc/)
 
       - name: Pack

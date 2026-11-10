@@ -1,0 +1,8 @@
+; A stock Godot project with no script runtime but GDScript: scripts/verify-load.mjs installs the staged addon into it and runs main.gd.
+
+config_version=5
+
+[application]
+
+config/name="godot-tsc load check"
+config/features=PackedStringArray("4.7")

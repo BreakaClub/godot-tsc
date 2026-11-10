@@ -14,8 +14,8 @@ non-blocking API for [GodotJS](https://github.com/godotjs/GodotJS) code. Give it
 Nothing waits for it: every request is answered on a later frame, natively and on the Web. It is for in-game code editors, live
 scripting and modding tools, and anything else that needs TypeScript's answers while the game runs.
 
-> **Status: 7.0.0, pre-release.** It is not on npm yet, and the only prebuilt binaries are for macOS (Apple silicon) and the Web; other
-> desktop platforms build from source (below) but are untested.
+> **Status: 7.0.0.** Prebuilt for macOS, Linux, Windows, Android, iOS and threaded Web exports; see [Platforms](#platforms) for what
+> has been run and what has only been built.
 
 ## Contents
 
@@ -192,11 +192,24 @@ and with Breaka's Godot 4.8.
 
 ## Platforms
 
-| Platform | File | Status |
+| Platform | File | Checked |
 | --- | --- | --- |
-| macOS (Apple silicon) | `libgodot_tsc.dylib` | Prebuilt. Built against the Godot 4.7.2 API, so it loads in 4.7.2 and newer. |
-| Web (stock Godot 4.7 templates) | `godot_tsc.web.stock.wasm` | Prebuilt. An Emscripten 4.0.11 side module for threaded Web exports. |
-| Linux, Windows, macOS (Intel) | `libgodot_tsc.so`, `godot_tsc.dll` | Build from source (`pnpm build:native --target=<triple>`); untested. |
+| macOS, universal (Apple silicon and Intel) | `libgodot_tsc.dylib` | Loaded in stock Godot 4.7.2 as each architecture. |
+| Linux x86_64, arm64 (glibc 2.35 or newer) | `libgodot_tsc.linux.<arch>.so` | Loaded in stock Godot 4.7.2. |
+| Windows x86_64, arm64 | `godot_tsc.windows.<arch>.dll` | Loaded in stock Godot 4.7.2. |
+| Android arm64-v8a, x86_64 (API 24 or newer) | `libgodot_tsc.android.<arch>.so` | Built and linked; not run. |
+| iOS arm64 devices (iOS 14 or newer) | `libgodot_tsc.ios.arm64.dylib` | Built and linked; not run. |
+| Web, threaded (stock Godot 4.7 templates) | `godot_tsc.web.stock.wasm` | An Emscripten 4.0.11 side module. |
+
+Every library is built against the Godot 4.7.2 API, so it loads in 4.7.2 and newer. "Loaded" means the release's own build loaded the
+library in the official editor, with no GodotJS, and compiled a source through it (`pnpm verify:load`).
+
+Not built: 32-bit targets, the iOS simulator, and Web exports without threads. The extension runs the checker on a thread of its own,
+which a Web export without thread support cannot start.
+
+The first `godot --headless --import` of a project after the addon is installed can crash as Godot exits (in the editor's
+documentation generation for a newly found extension, with none of this library on the stack). The import itself completes and later
+runs are unaffected.
 
 GodotJS's native V8 has no WebAssembly, which is why the checker runs as a GDExtension rather than as a wasm module in JavaScript.
 

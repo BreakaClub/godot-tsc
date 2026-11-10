@@ -86,6 +86,7 @@
     "demo": "node scripts/demo.mjs",
     "demo:verify": "node scripts/demo.mjs --verify",
     "verify:bindings": "node scripts/verify-bindings.mjs",
+    "verify:load": "node scripts/verify-load.mjs",
     "notices": "node scripts/notices.mjs"
   },
   "devDependencies": {

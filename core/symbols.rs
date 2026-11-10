@@ -157,6 +157,21 @@ bun_ast::link_impl_TranspilerCacheImpl! {
     }
 }
 
+/// Bun's writer to Linux's ftrace, which `BUN_TRACE=1` turns its phase timings to. It is C++ this host does not have: tracing
+/// is reported as unavailable, which is the answer of a system without tracefs, and nothing is emitted.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn Bun__linux_trace_init() -> core::ffi::c_int {
+    0
+}
+
+/// Called only after `Bun__linux_trace_init` reports tracing as available.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn Bun__linux_trace_emit(_event_name: *const core::ffi::c_char, _duration_ns: i64) -> core::ffi::c_int {
+    unreachable!("this host has no ftrace writer");
+}
+
 /// Bun's macros run JavaScript at build time; `features.no_macros` is set. The parameters are the ones Bun's declaration of this function has.
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]

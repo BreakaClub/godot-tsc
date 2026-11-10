@@ -1,6 +1,6 @@
 // Stages the addon the package ships (addon/godot-tsc/) from the binaries in out/bin, and writes its manifest from what is there:
 //
-//   node scripts/stage-addon.mjs [--web-profile=stock|breaka] [--require-binaries]
+//   node scripts/stage-addon.mjs [--web-profile=stock|breaka] [--require-binaries] [--require-all-platforms]
 //
 //   addon/godot-tsc/godot_tsc.gdextension   lists each staged native library, and the Web side module of one profile (default stock)
 //   addon/godot-tsc/bin/                    the binaries
@@ -14,15 +14,16 @@
 // A Web manifest names one side module for `web.*.threads.wasm32`, so it can serve one profile's templates: a module linked for another engine's
 // Emscripten kills the page at load (scripts/godot-api.mjs). Both profiles' modules may be staged; the manifest names the one `--web-profile` picks.
 // `--require-binaries` (prepack) refuses to stage an addon without a native library, so a pack never ships an empty addon.
+// `--require-all-platforms` (a release) refuses to stage one that lacks any platform's library, an architecture of the macOS one, or the Web module.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { NATIVE_API, NATIVE_LIBRARIES, OUT_BIN, parseArguments, root, WEB_PROFILES } from './godot-api.mjs';
+import { MACOS_LIBRARY, NATIVE_API, NATIVE_LIBRARY_NAMES, NATIVE_TARGETS, OUT_BIN, parseArguments, root, WEB_PROFILES } from './godot-api.mjs';
 
 const ADDON_NAME = 'godot-tsc';
 const MANIFEST_NAME = 'godot_tsc.gdextension';
-const args = parseArguments(process.argv.slice(2), { flags: ['--require-binaries'], values: ['--web-profile'] });
+const args = parseArguments(process.argv.slice(2), { flags: ['--require-binaries', '--require-all-platforms'], values: ['--web-profile'] });
 const webProfileName = args.values['--web-profile'] ?? 'stock';
 const webProfile = WEB_PROFILES[webProfileName];
 if (webProfile === undefined) throw new Error(`Unknown Web profile ${webProfileName}: ${Object.keys(WEB_PROFILES).join(' or ')}`);
@@ -39,18 +40,12 @@ function macosArchitectures(path) {
 
 const staged = [];
 const lines = [];
-const macos = join(OUT_BIN, NATIVE_LIBRARIES.macos);
-if (existsSync(macos)) {
-  staged.push(NATIVE_LIBRARIES.macos);
-  for (const arch of macosArchitectures(macos)) for (const mode of ['debug', 'release']) lines.push(`macos.${mode}.${arch} = "${resource(NATIVE_LIBRARIES.macos)}"`);
-}
-if (existsSync(join(OUT_BIN, NATIVE_LIBRARIES.linux))) {
-  staged.push(NATIVE_LIBRARIES.linux);
-  for (const mode of ['debug', 'release']) lines.push(`linux.${mode}.x86_64 = "${resource(NATIVE_LIBRARIES.linux)}"`);
-}
-if (existsSync(join(OUT_BIN, NATIVE_LIBRARIES.windows))) {
-  staged.push(NATIVE_LIBRARIES.windows);
-  for (const mode of ['debug', 'release']) lines.push(`windows.${mode}.x86_64 = "${resource(NATIVE_LIBRARIES.windows)}"`);
+for (const target of Object.values(NATIVE_TARGETS)) {
+  if (staged.includes(target.library) || !existsSync(join(OUT_BIN, target.library))) continue;
+  staged.push(target.library);
+  // The macOS library has one architecture or both: the manifest lists the ones the file has.
+  const features = target.library === MACOS_LIBRARY ? macosArchitectures(join(OUT_BIN, MACOS_LIBRARY)) : target.features;
+  for (const feature of features) for (const mode of ['debug', 'release']) lines.push(`${target.platform}.${mode}.${feature} = "${resource(target.library)}"`);
 }
 if (args.flags.has('--require-binaries') && staged.length === 0) {
   throw new Error(`No native library in ${OUT_BIN}: run \`pnpm build:native\` (or put the release binaries there) before packing.`);
@@ -59,6 +54,15 @@ for (const profile of Object.values(WEB_PROFILES)) {
   if (!existsSync(join(OUT_BIN, profile.library))) continue;
   staged.push(profile.library);
   if (profile === webProfile) for (const mode of ['debug', 'release']) lines.push(`web.${mode}.threads.wasm32 = "${resource(profile.library)}"`);
+}
+if (args.flags.has('--require-all-platforms')) {
+  const universal = NATIVE_TARGETS['macos.universal'].triples.length;
+  const missing = [
+    ...NATIVE_LIBRARY_NAMES.filter(library => !staged.includes(library)),
+    ...(staged.includes(webProfile.library) ? [] : [webProfile.library]),
+    ...(lines.filter(line => line.startsWith('macos.release.')).length === universal ? [] : [`${MACOS_LIBRARY} with ${universal} architectures`]),
+  ];
+  if (missing.length > 0) throw new Error(`Not every platform's binary is in ${OUT_BIN}. Missing: ${missing.join(', ')}.`);
 }
 if (args.values['--web-profile'] !== undefined && !existsSync(join(OUT_BIN, webProfile.library))) {
   throw new Error(`--web-profile=${webProfile.name} asks for ${webProfile.library}, which is not in ${OUT_BIN}: run \`pnpm build:web --profile=${webProfile.name}\`.`);

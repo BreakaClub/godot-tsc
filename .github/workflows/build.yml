@@ -1,0 +1,165 @@
+name: Build binaries
+
+# The extension for every platform the package ships (scripts/godot-api.mjs's NATIVE_TARGETS, and the Web side module), each as a `native-*`
+# artifact of one file. CI and Release both call this, so what a release publishes is built and checked the way every commit is.
+#
+# The desktop libraries are built on their own system and architecture and then loaded in the official Godot editor, with no GodotJS, which
+# compiles a source through them (scripts/verify-load.mjs). The Android and iOS libraries are built and linked with nothing left undefined;
+# nothing here can run them.
+on:
+  workflow_call:
+    inputs:
+      retention-days:
+        description: Days the artifacts are kept
+        type: number
+        default: 14
+
+env:
+  # The stock editor the desktop libraries are loaded in: the release whose API they are bound to (scripts/godot-api.mjs's NATIVE_API).
+  GODOT_RELEASE: https://github.com/godotengine/godot/releases/download/4.7.2-stable
+
+jobs:
+  native:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos.universal
+            runner: macos-latest
+            triples: aarch64-apple-darwin x86_64-apple-darwin
+            library: libgodot_tsc.dylib
+            godot-archive: Godot_v4.7.2-stable_macos.universal.zip
+            godot-binary: Godot.app/Contents/MacOS/Godot
+          # The oldest Ubuntu GitHub runs: the library needs the glibc of the system it is linked on, or a newer one (2.35).
+          - target: linux.x86_64
+            runner: ubuntu-22.04
+            triples: x86_64-unknown-linux-gnu
+            library: libgodot_tsc.linux.x86_64.so
+            godot-archive: Godot_v4.7.2-stable_linux.x86_64.zip
+            godot-binary: Godot_v4.7.2-stable_linux.x86_64
+          - target: linux.arm64
+            runner: ubuntu-22.04-arm
+            triples: aarch64-unknown-linux-gnu
+            library: libgodot_tsc.linux.arm64.so
+            godot-archive: Godot_v4.7.2-stable_linux.arm64.zip
+            godot-binary: Godot_v4.7.2-stable_linux.arm64
+          - target: windows.x86_64
+            runner: windows-latest
+            triples: x86_64-pc-windows-msvc
+            library: godot_tsc.windows.x86_64.dll
+            godot-archive: Godot_v4.7.2-stable_win64.exe.zip
+            godot-binary: Godot_v4.7.2-stable_win64_console.exe
+          - target: windows.arm64
+            runner: windows-11-arm
+            triples: aarch64-pc-windows-msvc
+            library: godot_tsc.windows.arm64.dll
+            godot-archive: Godot_v4.7.2-stable_windows_arm64.exe.zip
+            godot-binary: Godot_v4.7.2-stable_windows_arm64_console.exe
+          - target: android.arm64
+            runner: ubuntu-latest
+            triples: aarch64-linux-android
+            library: libgodot_tsc.android.arm64.so
+          - target: android.x86_64
+            runner: ubuntu-latest
+            triples: x86_64-linux-android
+            library: libgodot_tsc.android.x86_64.so
+          - target: ios.arm64
+            runner: macos-latest
+            triples: aarch64-apple-ios
+            library: libgodot_tsc.ios.arm64.dylib
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      # scripts/vendor-bun.py reads Cargo manifests with tomllib, which Python has from 3.11.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Rust toolchain (rust-toolchain.toml) with the build's targets
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add ${{ matrix.triples }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # Fetches Bun at the pinned revision from GitHub into .cache/bun and extracts its crates into vendor/bun.
+      - name: Vendor Bun's crates
+        run: node scripts/vendor.mjs
+
+      - name: Build
+        run: node scripts/build-native.mjs --target=${{ matrix.target }}
+
+      - name: Fetch the stock Godot editor
+        if: matrix.godot-archive
+        run: |
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/godot.zip" "$GODOT_RELEASE/${{ matrix.godot-archive }}"
+          if [ "$RUNNER_OS" = Windows ]; then 7z x -y -o"$RUNNER_TEMP/godot" "$RUNNER_TEMP/godot.zip"; else unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"; fi
+          echo "GODOT=$RUNNER_TEMP/godot/${{ matrix.godot-binary }}" >> "$GITHUB_ENV"
+
+      - name: Load the library in stock Godot and compile with it
+        if: matrix.godot-archive
+        run: node scripts/verify-load.mjs
+
+      # The universal library's other half: the same editor run as x86_64, under Rosetta.
+      - name: Load the x86_64 half in stock Godot
+        if: matrix.target == 'macos.universal'
+        run: node scripts/verify-load.mjs --arch=x86_64
+
+      # One file per artifact: a file is stored at the artifact's root, which the packing job downloads into out/bin.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.target }}
+          path: out/bin/${{ matrix.library }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+  web:
+    name: web (stock profile)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: 4.0.11
+
+      # scripts/vendor-bun.py reads Cargo manifests with tomllib, which Python has from 3.11; the image's is 3.10.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Rust toolchain (rust-toolchain.toml) with the Emscripten target and the standard library's sources
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add wasm32-unknown-emscripten
+          rustup component add rust-src
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Vendor Bun's crates
+        run: node scripts/vendor.mjs
+
+      - name: Build
+        run: node scripts/build-web.mjs --profile=stock
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-web-stock
+          path: out/bin/godot_tsc.web.stock.wasm
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

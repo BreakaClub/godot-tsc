@@ -15,3 +15,6 @@ tests/bindings/.godot/
 tests/bindings/addons/
 tests/bindings/tsc/
 tests/bindings/project.godot
+# What scripts/verify-load.mjs writes into its project.
+tests/stock/.godot/
+tests/stock/addons/
