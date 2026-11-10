@@ -12,14 +12,14 @@ jobs:
     name: Typecheck, Test & Build (TypeScript)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           package-manager-cache: false
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
           run_install: false
@@ -40,19 +40,19 @@ jobs:
     name: Native build & compiler tests (macOS arm64)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           package-manager-cache: false
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
           run_install: false
@@ -78,14 +78,14 @@ jobs:
 
       # Each run's builds, for trying a commit without building it: kept two weeks.
       # One file per artifact: a file is stored at the artifact's root, which the package job downloads into out/bin.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-macos
           path: out/bin/libgodot_tsc.dylib
           if-no-files-found: error
           retention-days: 14
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: godot-tsc-cli-macos
           path: target/release/godot-tsc-cli
@@ -96,14 +96,14 @@ jobs:
     name: Web side module (stock profile)
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@v16
         with:
           version: 4.0.11
 
       # scripts/vendor-bun.py reads Cargo manifests with tomllib, which Python has from 3.11; the image's is 3.10.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -113,7 +113,7 @@ jobs:
           rustup target add wasm32-unknown-emscripten
           rustup component add rust-src
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           package-manager-cache: false
@@ -124,7 +124,7 @@ jobs:
       - name: Build
         run: node scripts/build-web.mjs --profile=stock
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-web-stock
           path: out/bin/godot_tsc.web.stock.wasm
@@ -137,14 +137,14 @@ jobs:
     # macOS, for `lipo`: the staged manifest lists the architectures the macOS library has (scripts/stage-addon.mjs).
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           package-manager-cache: false
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.5.2
           run_install: false
@@ -159,7 +159,7 @@ jobs:
       - name: Build TypeScript
         run: pnpm build
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           path: out/bin/
@@ -173,7 +173,7 @@ jobs:
           pnpm pack --pack-destination package
           ls -lah package
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: godot-tsc-package
           path: package/
