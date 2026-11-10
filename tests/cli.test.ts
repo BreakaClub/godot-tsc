@@ -78,7 +78,7 @@ test('postinstall of a package without a staged addon (its own repository) does 
   }
 });
 
-test('setup installs the addon, writes .version and node_modules/.gdignore, is idempotent, and replaces the addon whole when forced', () => {
+test('setup installs the addon, writes .version, a .gitignore and node_modules/.gdignore, is idempotent, and replaces the addon whole when forced', () => {
   const { dir, cli } = installedPackage();
   const project = godotProject();
   try {
@@ -91,6 +91,13 @@ test('setup installs the addon, writes .version and node_modules/.gdignore, is i
     assert.ok(existsSync(join(addon, 'bin', 'libgodot_tsc.dylib')));
     assert.equal(readFileSync(join(addon, '.version'), 'utf8'), pkg.version);
     assert.ok(existsSync(join(project, 'node_modules', '.gdignore')));
+    // The project's git leaves the whole addon out, its .gitignore included; the rest of the project it keeps.
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd: project }).status, 0);
+    const ignored = (path: string): boolean => spawnSync('git', ['check-ignore', '-q', path], { cwd: project }).status === 0;
+    for (const path of ['addons/godot-tsc/godot_tsc.gdextension', 'addons/godot-tsc/bin/libgodot_tsc.dylib', 'addons/godot-tsc/.gitignore', 'addons/godot-tsc/.version']) {
+      assert.ok(ignored(path), `${path} is ignored`);
+    }
+    assert.ok(!ignored('project.godot'), 'the project itself is not');
 
     const second = spawnSync('node', [cli, 'setup', '--project-dir', project], { encoding: 'utf8' });
     assert.equal(second.status, 0);

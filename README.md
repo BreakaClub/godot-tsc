@@ -54,6 +54,10 @@ npx godot-tsc setup [--project-dir <path>] [--force]
 
 Then open the project in the Godot editor once, so it imports the extension.
 
+npm owns the addon, as it owns `node_modules`: the installer writes `addons/godot-tsc/.gitignore` (`*`), so git leaves the folder out, and
+an install on a fresh clone (or `npx godot-tsc setup`) puts it back. A project that has to commit the addon (an export machine with no
+Node, say) deletes that `.gitignore` after each install.
+
 ## Use
 
 ```ts
