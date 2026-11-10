@@ -6,6 +6,7 @@
 //   addon/godot-tsc/bin/                    the binaries
 //   addon/godot-tsc/build.json              each binary's SHA-256, the package version and the commit it was staged at
 //   addon/godot-tsc/.version                the package version (bin/cli.mjs compares it before reinstalling)
+//   addon/godot-tsc/LICENSE, THIRD_PARTY_NOTICES.md   the licenses, so a game exported with the addon carries them
 //   libs/typescript_libs.bin                Bun's bundle of TypeScript's lib.*.d.ts (vendor/bun), for a project's libDir (README.md)
 //
 // build.json also records what each binary is bound to: the Godot API dumps' SHA-256 (natively, and per Web profile) and the Bun revision.
@@ -98,4 +99,5 @@ writeFileSync(join(destination, 'build.json'), `${JSON.stringify({
   nativeApi: { version: NATIVE_API.version, ...binding(NATIVE_API) }, webModules, binaries: hashes,
 }, null, 2)}\n`);
 writeFileSync(join(destination, '.version'), pkg.version);
+for (const name of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) copyFileSync(resolve(root, name), join(destination, name));
 console.log(`[stage-addon] Staged ${ADDON_NAME} v${pkg.version} with ${staged.length} binary file(s) (${staged.join(', ') || 'none'}) into ${destination}`);
