@@ -16,6 +16,8 @@ pub mod protocol;
 mod service;
 mod services;
 mod symbols;
+#[cfg(windows)]
+mod symbols_windows;
 mod transpile;
 #[cfg(target_family = "wasm")]
 pub mod wasm;
