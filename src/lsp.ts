@@ -39,6 +39,68 @@ export interface LspDocumentHighlight {
   readonly kind: 1 | 2 | 3;
 }
 
+/** LSP's `CompletionItemKind`, of the kinds the server gives. */
+export type LspCompletionItemKind = 2 | 3 | 4 | 6 | 7 | 8 | 9 | 10 | 13 | 14 | 20 | 25;
+
+export interface LspCompletionItem {
+  readonly label: string;
+  readonly kind: LspCompletionItemKind;
+  /** The type, for what the project declares (the lib files' globals have none). */
+  readonly detail?: string;
+  /** The order to show the items in: the project's names, then the lib files', then keywords. */
+  readonly sortText: string;
+  /** What choosing the item does: replace the name being typed. */
+  readonly textEdit: LspTextEdit;
+}
+
+export interface LspCompletionList {
+  readonly isIncomplete: boolean;
+  readonly items: readonly LspCompletionItem[];
+}
+
+export interface LspSignatureInformation {
+  readonly label: string;
+  /** Each parameter as the UTF-16 range of the label it is written in. */
+  readonly parameters: readonly { readonly label: readonly [number, number] }[];
+}
+
+export interface LspSignatureHelp {
+  readonly signatures: readonly LspSignatureInformation[];
+  readonly activeSignature: number;
+  readonly activeParameter: number;
+}
+
+/** `InlayHintKind`: 1 is a type, 2 a parameter's name. */
+export interface LspInlayHint {
+  readonly position: LspPosition;
+  readonly label: string;
+  readonly kind: 1 | 2;
+  readonly paddingRight: boolean;
+}
+
+/** `DiagnosticSeverity`: 1 error, 2 warning, 3 information, 4 hint. `code` is TypeScript's (2322). */
+export interface LspDiagnostic {
+  readonly range: LspRange;
+  readonly severity: 1 | 2 | 3 | 4;
+  readonly code: number;
+  readonly source: 'ts';
+  readonly message: string;
+  readonly relatedInformation?: readonly { readonly location: LspLocation; readonly message: string }[];
+}
+
+/** The diagnostics of every source of the project, and what the check saw: the files it loaded and those it ran out of stack in. */
+export interface LspWorkspaceDiagnostics {
+  readonly items: readonly { readonly uri: string; readonly kind: 'full'; readonly items: readonly LspDiagnostic[] }[];
+  readonly filesLoaded: number;
+  readonly incomplete: readonly string[];
+}
+
+/** Which arguments inlay hints name: none, the literals (the default), or all but those that are the parameter's name. */
+export type InlayParameterNames = 'none' | 'literals' | 'all';
+
+/** LSP's `ServerCancelled`: a diagnostics request that a newer one for the same document replaced before it began. */
+export const SERVER_CANCELLED = -32802;
+
 /** A request the language server refused: JSON-RPC's code and the server's message (`-32803`, "You cannot rename this element."). */
 export class LspError extends Error {
   readonly code: number;
@@ -68,17 +130,19 @@ export function pathOfUri(uri: string): string {
 export class LspSession {
   private readonly host: TscHost;
   private readonly project: ProjectOptions;
+  private readonly inlayParameterNames: InlayParameterNames;
   private nextId = 1;
 
-  constructor(host: TscHost, project: ProjectOptions) {
+  constructor(host: TscHost, project: ProjectOptions, options: { readonly inlayParameterNames?: InlayParameterNames } = {}) {
     this.host = host;
     this.project = project;
+    this.inlayParameterNames = options.inlayParameterNames ?? 'literals';
   }
 
   /** Starts the session. Resolves with the server's capabilities. */
   async initialize(scope?: RequestScope): Promise<Record<string, unknown>> {
     const result = await this.request<{ capabilities: Record<string, unknown> }>('initialize', {
-      processId: null, rootUri: null, capabilities: {}, initializationOptions: { config: this.project.config, libDir: this.project.libDir },
+      processId: null, rootUri: null, capabilities: {}, initializationOptions: { config: this.project.config, libDir: this.project.libDir, inlayParameterNames: this.inlayParameterNames },
     }, scope);
     await this.notify('initialized', {});
     return result.capabilities;
@@ -86,12 +150,18 @@ export class LspSession {
 
   /** Sends a request and resolves with its result, or fails with `LspError`. */
   async request<T>(method: string, params: unknown, scope?: RequestScope): Promise<T> {
+    return (await this.requestTimed<T>(method, params, scope)).result;
+  }
+
+  /** `request`, with the time the service thread took over it. */
+  async requestTimed<T>(method: string, params: unknown, scope?: RequestScope): Promise<{ readonly result: T; readonly serviceMs: number }> {
     const id = this.nextId++;
-    const messages = await this.host.lsp({ jsonrpc: '2.0', id, method, params }, scope);
-    const response = messages.find(message => message.id === id && message.method === undefined);
+    const reply = await this.host.lsp({ jsonrpc: '2.0', id, method, params }, scope);
+    const response = reply.messages.find(message => message.id === id && message.method === undefined);
     if (response === undefined) throw new Error(`The language server did not answer ${method}`);
     if (response.error !== undefined) throw new LspError(response.error.code, response.error.message);
-    return response.result as T;
+    // The server's result has the shape LSP gives this method; `T` names it.
+    return { result: response.result as T, serviceMs: reply.serviceMs };
   }
 
   /** Sends a notification. */
@@ -107,6 +177,38 @@ export class LspSession {
   /** Replaces the text of the file at `path`. */
   change(path: string, text: string, version: number, scope?: RequestScope): Promise<void> {
     return this.notify('textDocument/didChange', { textDocument: { uri: fileUri(path), version }, contentChanges: [{ text }] }, scope);
+  }
+
+  /** The name and type at `position`, as markdown, or null. */
+  hover(path: string, position: LspPosition, scope?: RequestScope): Promise<{ readonly contents: { readonly kind: 'markdown'; readonly value: string } } | null> {
+    return this.request('textDocument/hover', { textDocument: { uri: fileUri(path) }, position }, scope);
+  }
+
+  completion(path: string, position: LspPosition, scope?: RequestScope): Promise<LspCompletionList> {
+    return this.request('textDocument/completion', { textDocument: { uri: fileUri(path) }, position }, scope);
+  }
+
+  /** The signatures of the call whose arguments `position` is in, or null. */
+  signatureHelp(path: string, position: LspPosition, scope?: RequestScope): Promise<LspSignatureHelp | null> {
+    return this.request('textDocument/signatureHelp', { textDocument: { uri: fileUri(path) }, position }, scope);
+  }
+
+  inlayHints(path: string, range: LspRange, scope?: RequestScope): Promise<LspInlayHint[]> {
+    return this.request('textDocument/inlayHint', { textDocument: { uri: fileUri(path) }, range }, scope);
+  }
+
+  /**
+   * Checks the project, and resolves with the diagnostics of every source and the time the check took. A check that a newer one replaced
+   * before it began fails with `LspError` whose code is `SERVER_CANCELLED`.
+   */
+  workspaceDiagnostics(scope?: RequestScope): Promise<{ readonly result: LspWorkspaceDiagnostics; readonly serviceMs: number }> {
+    return this.requestTimed('workspace/diagnostic', { previousResultIds: [] }, scope);
+  }
+
+  /** Checks the project, and resolves with the diagnostics of the file at `path`. */
+  async diagnostics(path: string, scope?: RequestScope): Promise<LspDiagnostic[]> {
+    const report = await this.request<{ readonly items: LspDiagnostic[] }>('textDocument/diagnostic', { textDocument: { uri: fileUri(path) } }, scope);
+    return report.items;
   }
 
   definition(path: string, position: LspPosition, scope?: RequestScope): Promise<LspLocation[]> {

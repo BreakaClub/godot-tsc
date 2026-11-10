@@ -69,6 +69,7 @@ EXCLUDED_FILES = [
 
 FILE_KEYS = "patches/bun-sema-file-keys.patch"
 DOCUMENTATION = "patches/bun-sema-documentation.patch"
+SYMBOLS_IN_SCOPE = "patches/bun-sema-symbols-in-scope.patch"
 OPTIONS_TYPES = "patches/bun-options-types-reduced.patch"
 SOURCEMAP = "patches/bun-sourcemap-write-only.patch"
 WASM32 = "patches/bun-wasm32.patch"
@@ -129,6 +130,8 @@ SOURCE_ADAPTATIONS = [
                "The reader collects a comment's own text, as TypeScript's parser reads it into the comment's JSDocText (own_text): a description of a property carries its documentation."),
     adaptation("src/sema/check/services/jsdoc.rs", DOCUMENTATION,
                "documentation_of_property: symbol.getDocumentationComment of a property in plain text, over own_text, as TypeScript's API gives it."),
+    adaptation("src/sema/check/services/symbol_at_location.rs", SYMBOLS_IN_SCOPE,
+               "symbols_in_scope: TypeScript's getSymbolsInScope, which completion lists; the services had it only as the private copy_symbols_in_scope, behind symbol_in_scope's lookup of one name."),
     adaptation("src/semver/lib.rs", WASM32, "64-bit size asserts hold on 64-bit targets only (the String is eight bytes either way)."),
     adaptation("src/errno/lib.rs", WASM32, "wasm has no errno table: it takes the portable one."),
     adaptation("src/perf/Cargo.toml", WASM32, "bun_sys is a dependency of non-wasm targets."),

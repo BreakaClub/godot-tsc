@@ -9,7 +9,7 @@ import { before, test } from 'node:test';
 // Builds dist/ first (scripts/build.mjs), so it checks what would ship.
 
 const root = resolve(__dirname, '..');
-const HOST_VALUES = ['REQUEST_DEADLINE_MS', 'RequestCancelled', 'RequestScope', 'Tsc', 'TscProject', 'parseTranspileResult', 'transpileResultOf', 'parseReply'];
+const HOST_VALUES = ['REQUEST_DEADLINE_MS', 'RequestCancelled', 'RequestScope', 'Tsc', 'LspSession', 'LspError', 'parseTranspileResult', 'transpileResultOf', 'parseReply'];
 
 const LIB_BUNDLE = [join(root, 'libs/typescript_libs.bin'), join(root, 'vendor/bun/typescript_libs.bin')].find(file => existsSync(file));
 

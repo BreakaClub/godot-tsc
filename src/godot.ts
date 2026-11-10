@@ -13,7 +13,6 @@ declare module 'godot' {
     removeFile(path: string): void;
     requestPing(): number;
     requestCompile(path: string, source: string, refresh: boolean): number;
-    requestCheck(config: string, libDir: string): number;
     requestQuery(requestJson: string): number;
     requestStall(milliseconds: number): number;
     cancel(id: number): boolean;
@@ -52,10 +51,6 @@ class GodotLink implements TscLink {
 
   requestCompile(path: string, source: string, refresh: boolean): number {
     return this.service.requestCompile(path, source, refresh);
-  }
-
-  requestCheck(config: string, libDir: string): number {
-    return this.service.requestCheck(config, libDir);
   }
 
   requestQuery(requestJson: string): number {

@@ -4,7 +4,7 @@
 //! GodotJS calls from. The library runs on a plain Rust thread of its own that touches no Godot API and talks in strings
 //! (`queue.rs`).
 //!
-//! **No call waits for that thread.** A request (`request_compile`, `request_check`, `request_query`, `request_ping`) is queued
+//! **No call waits for that thread.** A request (`request_compile`, `request_query`, `request_ping`) is queued
 //! and returns an id at once, and `poll` hands over the finished replies, which carry their id; `cancel` takes a request back.
 //! The caller is the engine's main thread, and on the Web the page's: a browser starts a pthread only when the page's thread
 //! returns to its event loop, so a call that waited for the service thread would stall the page for as long as it takes the
@@ -13,15 +13,15 @@
 //! that is never held while a request runs: `start`, `stop`, `set_file`, `set_files`, `remove_file`, `request_*`, `cancel`,
 //! `poll` and `state`.
 //!
-//! The service is single flight: it runs one request at a time, in the order they were made, and a check that has not begun
-//! when a newer one is made is dropped and answered as superseded. Nothing runs while nothing is asked: the thread waits on
+//! The service is single flight: it runs one request at a time, in the order they were made, and a diagnostics request of the
+//! language server that has not begun when a newer one for the same document is made is dropped and answered as cancelled. Nothing runs while nothing is asked: the thread waits on
 //! a condition variable, and the caller asks for frames (or a timer) only while a request is outstanding.
 
 mod queue;
 
 use godot::prelude::*;
 use godot_tsc_core::protocol::{FileText, Request, TranspileRequest};
-use queue::{Job, Kind, Worker, answer};
+use queue::{Job, Kind, Supersedes, Worker, answer};
 use std::time::Duration;
 
 struct GodotTscExtension;
@@ -60,7 +60,12 @@ impl GodotTsc {
     /// Queues `request`, to be answered as a reply of `kind`, and returns its id.
     fn ask(&mut self, kind: Kind, request: Request) -> i64 {
         let id = self.next_id();
-        self.worker().shared.push(Job::Ask { id, kind, request });
+        let supersedes = match &request {
+            Request::Lsp { message } => godot_tsc_core::supersede_key(message)
+                .map(|key| Supersedes { key, superseded: godot_tsc_core::superseded_response(message) }),
+            _ => None,
+        };
+        self.worker().shared.push(Job::Ask { id, kind, request, supersedes });
         id
     }
 
@@ -125,14 +130,7 @@ impl GodotTsc {
         )
     }
 
-    /// Starts a check of the project whose configuration is at `config`, with the lib files in `lib_dir`. Returns the id the
-    /// reply carries. A check not begun when the next is made is dropped.
-    #[func]
-    fn request_check(&mut self, config: GString, lib_dir: GString) -> i64 {
-        self.ask(Kind::Check, Request::Check { config: config.to_string(), lib_dir: lib_dir.to_string() })
-    }
-
-    /// Starts an editor-services request, given as JSON (`{"op":"hover",...}`, `{"op":"inlayHints",...}`: `core/protocol.rs`).
+    /// Starts a request given as JSON (`{"op":"lsp","message":{...}}`, a message for the language server: `core/protocol.rs`, `core/lsp.rs`).
     /// Returns the id the reply carries, which `poll` hands over as a `query` reply. A request that is not valid is answered at once, as
     /// a failed result.
     #[func]

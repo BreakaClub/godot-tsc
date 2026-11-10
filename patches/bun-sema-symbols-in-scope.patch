@@ -1,0 +1,17 @@
+diff --git a/src/sema/check/services/symbol_at_location.rs b/src/sema/check/services/symbol_at_location.rs
+index 77e884f..28614f9 100644
+--- a/src/sema/check/services/symbol_at_location.rs
++++ b/src/sema/check/services/symbol_at_location.rs
+@@ -1144,6 +1144,12 @@ impl<'c, 'p, 's> Services<'c, 'p, 's> {
+         Some(self.symbol(found))
+     }
+ 
++    /// `getSymbolsInScope(node, meaning)`: every symbol a name at `node` can refer to.
++    pub fn symbols_in_scope(&mut self, node: NodeRef, meaning: SymbolFlags) -> Vec<SymbolRef> {
++        let found = self.copy_symbols_in_scope(node, meaning, None);
++        found.into_iter().map(|symbol| self.symbol(symbol)).collect()
++    }
++
+     /// `only`: nothing but the symbol that has this name.
+     fn copy_symbols_in_scope(
+         &self,

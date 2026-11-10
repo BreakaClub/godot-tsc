@@ -1,8 +1,8 @@
 import { Button, Callable, CodeEdit, Color, Control, Engine, FileAccess, GError, HBoxContainer, HSplitContainer, ItemList, Label, LineEdit, MarginContainer, OS, RenderingServer, TabContainer, VBoxContainer } from 'godot';
 import {
-  CATEGORY_ERROR, LspSession, RequestCancelled, RequestScope, fileUri, openTsc,
-  type CheckDiagnostic, type CheckOutcome, type InlayHint, type LspLocation, type LspPosition, type LspTextEdit, type ProjectFile, type TranspileResult,
-  type Tsc, type TscProject,
+  LspError, LspSession, RequestCancelled, RequestScope, SERVER_CANCELLED, fileUri, openTsc,
+  type LspCompletionItem, type LspCompletionItemKind, type LspDiagnostic, type LspInlayHint, type LspLocation, type LspPosition, type LspTextEdit,
+  type ProjectFile, type TranspileResult, type Tsc,
 } from 'godot-tsc';
 
 /** Where the demo's lib files are (written by `scripts/demo.mjs` from the package's `typescript_libs.bin`). */
@@ -44,13 +44,27 @@ export const d = distance(origin, { x: 3, y: 4 });
 export const label: string = d;
 `;
 
+/** What a check came to: the diagnostics of the source, that a newer check took its place before it began, or a failure. */
+type Checked =
+  | { readonly kind: 'checked'; readonly diagnostics: readonly LspDiagnostic[]; readonly serviceMs: number }
+  | { readonly kind: 'superseded' }
+  | { readonly kind: 'failed'; readonly message: string };
+
+/** LSP's `DiagnosticSeverity` of an error. */
+const SEVERITY_ERROR = 1;
+/** LSP's `InlayHintKind` of a type. */
+const INLAY_TYPE = 1;
+/** What signature help shows around the parameter the caret is at. */
+const ACTIVE_PARAMETER_OPEN = '«';
+const ACTIVE_PARAMETER_CLOSE = '»';
+
 /** What one look at the source came to: the transpile, the check and the inlay hints of the same text. */
 interface Refresh {
   readonly text: string;
   readonly transpile: TranspileResult;
   readonly transpileMs: number;
-  readonly check: CheckOutcome;
-  readonly hints: readonly InlayHint[];
+  readonly check: Checked;
+  readonly hints: readonly LspInlayHint[];
   /** What running the transpiled module exported, or why it could not run. */
   readonly run: ModuleRun | null;
 }
@@ -107,9 +121,37 @@ function isCancellation(error: unknown): boolean {
   return error instanceof RequestCancelled;
 }
 
-function describeDiagnostic(diagnostic: CheckDiagnostic): string {
-  const where = diagnostic.startPosition ? `${diagnostic.startPosition.line + 1}:${diagnostic.startPosition.character + 1}` : `@${diagnostic.pos}`;
-  return `${where}  TS${diagnostic.code}  ${diagnostic.messageText}`;
+function describeDiagnostic(diagnostic: LspDiagnostic): string {
+  return `${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}  TS${diagnostic.code}  ${diagnostic.message}`;
+}
+
+/** The kind of entry Godot's completion popup shows for an LSP completion item. */
+function completionKind(kind: LspCompletionItemKind): CodeEdit.CodeCompletionKind {
+  switch (kind) {
+    case 2:
+    case 3:
+    case 4:
+      return CodeEdit.CodeCompletionKind.KindFunction;
+    case 7:
+    case 8:
+    case 9:
+    case 25:
+      return CodeEdit.CodeCompletionKind.KindClass;
+    case 10:
+      return CodeEdit.CodeCompletionKind.KindMember;
+    case 13:
+    case 20:
+      return CodeEdit.CodeCompletionKind.KindEnum;
+    case 14:
+      return CodeEdit.CodeCompletionKind.KindKeyword;
+    case 6:
+      return CodeEdit.CodeCompletionKind.KindVariable;
+  }
+}
+
+/** The text inside a hover's markdown code block (`name: type`). */
+function hoverText(markdown: string): string {
+  return markdown.replace(/^```typescript\n/u, '').replace(/\n```$/u, '');
 }
 
 /**
@@ -142,7 +184,6 @@ function describeValue(value: unknown): string {
  */
 export default class Main extends Control {
   private tsc: Tsc | null = null;
-  private project: TscProject | null = null;
   private source: CodeEdit | null = null;
   private problems: ItemList | null = null;
   private javascript: CodeEdit | null = null;
@@ -156,6 +197,8 @@ export default class Main extends Control {
   private exportsList: ItemList | null = null;
   private status: Label | null = null;
   private hover: Label | null = null;
+  private signature: Label | null = null;
+  private signatureScope: RequestScope | null = null;
   /** The requests of the latest look at the source; a newer edit cancels them. */
   private refreshScope: RequestScope | null = null;
   private hoverScope: RequestScope | null = null;
@@ -170,7 +213,6 @@ export default class Main extends Control {
     const tsc = openTsc();
     this.tsc = tsc;
     tsc.setFiles([...readLibFiles(), { path: CONFIG_PATH, text: CONFIG }]);
-    this.project = tsc.project({ config: CONFIG_PATH, libDir: LIB_DIR });
     const lsp = new LspSession(tsc, { config: CONFIG_PATH, libDir: LIB_DIR });
     this.lsp = lsp.initialize().then(() => lsp);
     const args = OS.getCmdlineUserArgs();
@@ -196,7 +238,10 @@ export default class Main extends Control {
     this.requireSource().text = SAMPLE;
   }
 
-  /** The sample as a person sees it, the caret on `origin` in the call and its references listed, saved to `path`. */
+  /**
+   * The sample as a person sees it, saved to `path`: the references of `origin` listed, the signature of the call to distance shown, and the
+   * completions after `a.` in the editor's popup.
+   */
   private async capture(path: string): Promise<void> {
     await this.edit(SAMPLE);
     await this.moveCaretOntoOrigin();
@@ -204,6 +249,15 @@ export default class Main extends Control {
     const tabs = this.tabs;
     if (!tabs) throw new Error('The demo was not built');
     tabs.currentTab = tabs.getTabCount() - 1;
+    const lines = SAMPLE.split('\n');
+    const callLine = lines.findIndex(line => line.startsWith('export const d'));
+    await this.signatureAt({ line: callLine, character: (lines[callLine] ?? '').indexOf('{ x: 3') }, new RequestScope());
+    const source = this.requireSource();
+    const accessLine = lines.findIndex(line => line.includes('Math.hypot(a.x'));
+    source.grabFocus();
+    source.setCaretLine(accessLine);
+    source.setCaretColumn((lines[accessLine] ?? '').indexOf('a.x') + 'a.'.length);
+    await this.completeAtCaret(new RequestScope());
     const start = Engine.getProcessFrames();
     while (Engine.getProcessFrames() - start < CAPTURE_SETTLE_FRAMES) await new Promise(resolve => setTimeout(() => resolve(undefined), FRAME_POLL_MS));
     RenderingServer.forceDraw();
@@ -257,10 +311,10 @@ export default class Main extends Control {
     this.refreshScope?.cancel();
     this.hoverScope?.cancel();
     this.referencesScope?.cancel();
+    this.signatureScope?.cancel();
     this.lsp = null;
     this.tsc?.close();
     this.tsc = null;
-    this.project = null;
   }
 
   private build(): void {
@@ -283,6 +337,10 @@ export default class Main extends Control {
     source.textChanged.connect(Callable.create(() => this.scheduleRefresh()));
     source.textSet.connect(Callable.create(() => this.scheduleRefresh()));
     source.caretChanged.connect(Callable.create(() => this.showHover()));
+    // Completion: typing `.` asks for it, and so does Ctrl+Space.
+    source.codeCompletionEnabled = true;
+    source.codeCompletionPrefixes = ['.'];
+    source.codeCompletionRequested.connect(Callable.create(() => this.report(this.completeAtCaret())));
     split.addChild(source);
     this.source = source;
 
@@ -344,6 +402,10 @@ export default class Main extends Control {
     column.addChild(hover);
     this.hover = hover;
 
+    const signature = new Label();
+    column.addChild(signature);
+    this.signature = signature;
+
     const status = new Label();
     column.addChild(status);
     this.status = status;
@@ -368,24 +430,34 @@ export default class Main extends Control {
   /** Transpiles, checks and asks for the inlay hints of the source as it is now, and shows what came back. */
   private async refresh(): Promise<Refresh> {
     const tsc = this.requireTsc();
-    const project = this.requireProject();
+    const lsp = await this.requireLsp();
     const text = this.requireSource().text;
     this.refreshScope?.cancel();
     const scope = new RequestScope();
     this.refreshScope = scope;
     tsc.setFile(SOURCE_PATH, text);
     this.requireStatus().text = 'Checking...';
-    const [{ result: transpile, serviceMs: transpileMs }, check, hints] = await Promise.all([
+    const lines = text.split('\n');
+    const whole = { start: { line: 0, character: 0 }, end: { line: lines.length - 1, character: (lines.at(-1) ?? '').length } };
+    const check = lsp.workspaceDiagnostics(scope).then((checked): Checked => {
+      const own = checked.result.items.find(item => item.uri === fileUri(SOURCE_PATH));
+      return { kind: 'checked', diagnostics: own?.items ?? [], serviceMs: checked.serviceMs };
+    }, (error: unknown): Checked => {
+      if (error instanceof LspError && error.code === SERVER_CANCELLED) return { kind: 'superseded' };
+      if (error instanceof LspError) return { kind: 'failed', message: error.message };
+      throw error;
+    });
+    const [{ result: transpile, serviceMs: transpileMs }, checked, hints] = await Promise.all([
       tsc.transpileTimed(SOURCE_PATH, text, {}, scope),
-      project.check(scope),
-      project.inlayHints(SOURCE_PATH, { from: 0, to: text.length }, 'literals', scope),
+      check,
+      lsp.inlayHints(SOURCE_PATH, whole, scope),
     ]);
-    const refresh: Refresh = { text, transpile, transpileMs, check, hints, run: transpile.ok ? runModule(transpile.code) : null };
-    this.showRefresh(refresh, text);
+    const refresh: Refresh = { text, transpile, transpileMs, check: checked, hints, run: transpile.ok ? runModule(transpile.code) : null };
+    this.showRefresh(refresh);
     return refresh;
   }
 
-  private showRefresh(refresh: Refresh, text: string): void {
+  private showRefresh(refresh: Refresh): void {
     const source = this.requireSource();
     const problems = this.requireProblems();
     for (const line of this.markedLines) if (line < source.getLineCount()) source.setLineBackgroundColor(line, CLEAR_LINE_COLOUR);
@@ -403,10 +475,9 @@ export default class Main extends Control {
     let checkSummary: string;
     switch (refresh.check.kind) {
       case 'checked': {
-        const diagnostics = refresh.check.report.diagnostics.filter(diagnostic => diagnostic.fileName === undefined || diagnostic.fileName === SOURCE_PATH);
-        for (const diagnostic of diagnostics) {
+        for (const diagnostic of refresh.check.diagnostics) {
           problems.addItem(describeDiagnostic(diagnostic));
-          if (diagnostic.category === CATEGORY_ERROR && diagnostic.startPosition) this.markLine(diagnostic.startPosition.line);
+          if (diagnostic.severity === SEVERITY_ERROR) this.markLine(diagnostic.range.start.line);
         }
         checkSummary = `checked in ${refresh.check.serviceMs.toFixed(1)} ms`;
         break;
@@ -432,9 +503,7 @@ export default class Main extends Control {
     const hints = this.requireHints();
     hints.clear();
     for (const hint of refresh.hints) {
-      const before = text.slice(0, hint.position);
-      const line = before.split('\n').length;
-      hints.addItem(`${line}  ${hint.kind}  ${hint.label}`);
+      hints.addItem(`${hint.position.line + 1}  ${hint.kind === INLAY_TYPE ? 'type' : 'parameter'}  ${hint.label}`);
     }
 
     const transpileSummary = refresh.transpile.ok ? `transpiled in ${refresh.transpileMs.toFixed(1)} ms` : 'syntax errors';
@@ -500,11 +569,16 @@ export default class Main extends Control {
     const source = this.requireSource();
     const text = source.text;
     const offset = offsetOf(text, source.getCaretLine(), source.getCaretColumn());
+    const position = this.caretPosition();
     this.referencesScope?.cancel();
     const referencesScope = new RequestScope();
     this.referencesScope = referencesScope;
-    this.report(this.referencesAt(this.caretPosition(), referencesScope));
-    this.hoverAt(offset).then(shown => {
+    this.report(this.referencesAt(position, referencesScope));
+    this.signatureScope?.cancel();
+    const signatureScope = new RequestScope();
+    this.signatureScope = signatureScope;
+    this.report(this.signatureAt(position, signatureScope));
+    this.hoverAt(position).then(shown => {
       this.hoverWaiters = this.settle(this.hoverWaiters, offset, shown);
     }, (error: unknown) => {
       if (isCancellation(error)) return;
@@ -514,16 +588,47 @@ export default class Main extends Control {
     });
   }
 
-  private async hoverAt(offset: number): Promise<string> {
+  private async hoverAt(position: LspPosition): Promise<string> {
     this.hoverScope?.cancel();
     const scope = new RequestScope();
     this.hoverScope = scope;
+    const lsp = await this.requireLsp();
     // The hover reads the checker's copy of the file, so the edit is sent first: a hover asked for between keystrokes must not read old text.
     this.requireTsc().setFile(SOURCE_PATH, this.requireSource().text);
-    const hover = await this.requireProject().hover(SOURCE_PATH, offset, scope);
-    const shown = hover ? `${hover.name}: ${hover.type}` : 'Move the caret onto a name to see its type.';
+    const hover = await lsp.hover(SOURCE_PATH, position, scope);
+    const shown = hover ? hoverText(hover.contents.value) : 'Move the caret onto a name to see its type.';
     this.requireHover().text = shown;
     return shown;
+  }
+
+  /** Shows the signature of the call the caret is in, the parameter it is at between « and ». */
+  private async signatureAt(position: LspPosition, scope: RequestScope): Promise<string> {
+    const lsp = await this.requireLsp();
+    this.requireTsc().setFile(SOURCE_PATH, this.requireSource().text);
+    const help = await lsp.signatureHelp(SOURCE_PATH, position, scope);
+    const signature = help?.signatures[help.activeSignature];
+    let shown = '';
+    if (help && signature) {
+      const active = signature.parameters[help.activeParameter]?.label;
+      // The label's ranges are UTF-16 offsets, as a JavaScript string's are.
+      shown = active === undefined
+        ? signature.label
+        : `${signature.label.slice(0, active[0])}${ACTIVE_PARAMETER_OPEN}${signature.label.slice(active[0], active[1])}${ACTIVE_PARAMETER_CLOSE}${signature.label.slice(active[1])}`;
+    }
+    this.requireSignature().text = shown;
+    return shown;
+  }
+
+  /** Offers the completions at the caret in the editor's popup. */
+  private async completeAtCaret(scope?: RequestScope): Promise<readonly LspCompletionItem[]> {
+    const lsp = await this.requireLsp();
+    const source = this.requireSource();
+    this.requireTsc().setFile(SOURCE_PATH, source.text);
+    const list = await lsp.completion(SOURCE_PATH, this.caretPosition(), scope);
+    const items = [...list.items].sort((a, b) => a.sortText.localeCompare(b.sortText));
+    for (const item of items) source.addCodeCompletionOption(completionKind(item.kind), item.label, item.label);
+    source.updateCodeCompletionOptions(true);
+    return items;
   }
 
   /** `--verify`: drives the demo through what it shows and checks each answer, then quits with the result. */
@@ -544,14 +649,14 @@ export default class Main extends Control {
       if (first.run?.ok !== true || first.run.exports.d !== 5 || first.run.exports.label !== 5) throw new Error(`Running the sample gave ${JSON.stringify(first.run)}`);
       if (this.requireExportsList().getItemText(1) !== 'd = 5') throw new Error(`The Exports tab shows "${this.requireExportsList().getItemText(1)}"`);
       if (first.check.kind !== 'checked') throw new Error(`The sample's check was ${first.check.kind}`);
-      const errors = first.check.report.diagnostics;
+      const errors = first.check.diagnostics;
       const labelLine = SAMPLE.split('\n').findIndex(line => line.startsWith('export const label'));
-      if (errors.length !== 1 || errors[0]?.code !== TS_NOT_ASSIGNABLE || errors[0].startPosition?.line !== labelLine) {
+      if (errors.length !== 1 || errors[0]?.code !== TS_NOT_ASSIGNABLE || errors[0].range.start.line !== labelLine) {
         throw new Error(`Expected one TS2322 on line ${labelLine + 1}, got ${JSON.stringify(errors.map(describeDiagnostic))}`);
       }
       if (problems.itemCount !== 1 || !problems.getItemText(0).includes('TS2322')) throw new Error(`The Problems tab shows ${problems.itemCount} items`);
       // The inferred type of `d`, and the parameter name of the literal argument (`'literals'`: an identifier argument gets none).
-      const shown = first.hints.map(hint => `${SAMPLE.slice(0, hint.position).split('\n').length}:${hint.label}`).join(' ');
+      const shown = first.hints.map(hint => `${hint.position.line + 1}:${hint.label}`).join(' ');
       const dLine = SAMPLE.split('\n').findIndex(line => line.startsWith('export const d')) + 1;
       if (shown !== `${dLine}:: number ${dLine}:b:`) throw new Error(`The inlay hints are ${JSON.stringify(first.hints)}`);
 
@@ -571,14 +676,29 @@ export default class Main extends Control {
       }
       const renamed = await this.renameAtCaret('start', new RequestScope());
       if (renamed.text !== SAMPLE.replace('const origin', 'const start').replace('distance(origin', 'distance(start')) throw new Error(`The rename gave:\n${renamed.text}`);
-      if (renamed.check.kind !== 'checked' || renamed.check.report.diagnostics.length !== 1 || renamed.run?.ok !== true || renamed.run.exports.d !== 5) {
+      if (renamed.check.kind !== 'checked' || renamed.check.diagnostics.length !== 1 || renamed.run?.ok !== true || renamed.run.exports.d !== 5) {
         throw new Error(`The renamed source checks or runs otherwise: ${JSON.stringify(renamed.check)}`);
       }
+
+      // Completion, with the caret after `a.` (as typing the dot asks for it): the properties of a Point, in the editor's popup.
+      const source = this.requireSource();
+      const accessLine = renamed.text.split('\n').findIndex(line => line.includes('Math.hypot(a.x'));
+      source.setCaretLine(accessLine);
+      source.setCaretColumn((renamed.text.split('\n')[accessLine] ?? '').indexOf('a.x') + 'a.'.length);
+      const completions = await this.completeAtCaret(new RequestScope());
+      if (completions.map(item => item.label).join() !== 'x,y' || source.getCodeCompletionOptions().size() !== 2) {
+        throw new Error(`Completion after a. offered ${JSON.stringify(completions)}`);
+      }
+      // Signature help, in the second argument of the call to distance.
+      const callLine = renamed.text.split('\n').findIndex(line => line.startsWith('export const d'));
+      const callText = renamed.text.split('\n')[callLine] ?? '';
+      const signature = await this.signatureAt({ line: callLine, character: callText.indexOf('{ x: 3') }, new RequestScope());
+      if (signature !== 'distance(a: Point, «b: Point»): number' || this.requireSignature().text !== signature) throw new Error(`Signature help showed "${signature}"`);
 
       // The fix: the error goes away.
       const fixed = SAMPLE.replace('export const label: string = d;', 'export const label: string = d.toFixed(2);');
       const second = await this.edit(fixed);
-      if (second.check.kind !== 'checked' || second.check.report.diagnostics.length !== 0) throw new Error(`The fixed source still has problems: ${JSON.stringify(second.check)}`);
+      if (second.check.kind !== 'checked' || second.check.diagnostics.length !== 0) throw new Error(`The fixed source still has problems: ${JSON.stringify(second.check)}`);
       if (problems.getItemText(0) !== 'No problems') throw new Error(`The Problems tab shows "${problems.getItemText(0)}" for the fixed source`);
       if (second.run?.ok !== true || second.run.exports.label !== '5.00') throw new Error(`Running the fixed source gave ${JSON.stringify(second.run)}`);
 
@@ -587,7 +707,7 @@ export default class Main extends Control {
       if (third.transpile.ok || third.transpile.diagnostics.length === 0) throw new Error('A syntax error transpiled');
       if (!problems.getItemText(0).includes('syntax')) throw new Error(`The Problems tab shows "${problems.getItemText(0)}" for a syntax error`);
 
-      return `transpile ${first.transpileMs.toFixed(1)} ms, check ${first.check.serviceMs.toFixed(1)} ms, ran (d = 5), TS2322 found and cleared, hover "${hover}", ${first.hints.length} inlay hints, ${references.length} references, definition and rename, syntax error reported`;
+      return `transpile ${first.transpileMs.toFixed(1)} ms, check ${first.check.serviceMs.toFixed(1)} ms, ran (d = 5), TS2322 found and cleared, hover "${hover}", ${first.hints.length} inlay hints, ${references.length} references, definition and rename, completion, signature help, syntax error reported`;
     } finally {
       clearTimeout(deadline);
     }
@@ -596,11 +716,6 @@ export default class Main extends Control {
   private requireTsc(): Tsc {
     if (!this.tsc) throw new Error('The demo has no godot-tsc service');
     return this.tsc;
-  }
-
-  private requireProject(): TscProject {
-    if (!this.project) throw new Error('The demo has no project');
-    return this.project;
   }
 
   private requireSource(): CodeEdit {
@@ -621,6 +736,11 @@ export default class Main extends Control {
   private requireHints(): ItemList {
     if (!this.hints) throw new Error('The demo was not built');
     return this.hints;
+  }
+
+  private requireSignature(): Label {
+    if (!this.signature) throw new Error('The demo was not built');
+    return this.signature;
   }
 
   private requireReferences(): ItemList {

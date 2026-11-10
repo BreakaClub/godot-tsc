@@ -5,8 +5,9 @@
 //! and never while a request runs. That is the contract of the extension (`lib.rs`): a browser starts a pthread only when the
 //! page's thread returns to its event loop, so a caller that waited for the service thread could wait for ever.
 //!
-//! The service is single flight: it runs one job at a time, in the order they were pushed, and a check that has not begun when
-//! a newer one is pushed is dropped and answered as superseded. A job that has not begun can be cancelled; one that is running
+//! The service is single flight: it runs one job at a time, in the order they were pushed, and a request with a supersede key (a
+//! diagnostics request: `godot_tsc_core::supersede_key`) that has not begun when a newer one with that key is pushed is dropped and
+//! answered as cancelled by the server. A job that has not begun can be cancelled; one that is running
 //! is let finish, and its reply is dropped instead of kept. After `cancel(id)` returns true no reply for `id` is ever handed
 //! over by `poll`.
 
@@ -32,7 +33,6 @@ pub fn threads_alive() -> usize {
 /// What a request is for. It names the `kind` of the reply that answers it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
-    Check,
     Query,
     Compile,
     Ping,
@@ -42,7 +42,6 @@ pub enum Kind {
 impl Kind {
     pub fn name(self) -> &'static str {
         match self {
-            Kind::Check => "check",
             Kind::Query => "query",
             Kind::Compile => "compile",
             Kind::Ping => "ping",
@@ -55,8 +54,9 @@ impl Kind {
 pub enum Job {
     /// A change to the project: nothing is answered.
     Project(Request),
-    /// A request answered through `poll`: `{"id":n,"kind":"...","ms":t,"result":{...}}`.
-    Ask { id: i64, kind: Kind, request: Request },
+    /// A request answered through `poll`: `{"id":n,"kind":"...","ms":t,"result":{...}}`. With a `supersedes` key, a newer request with the
+    /// same key replaces it if it has not begun, and `superseded` is its result.
+    Ask { id: i64, kind: Kind, request: Request, supersedes: Option<Supersedes> },
     /// Holds the thread for `duration`, as a long check would. A hook for tests of what happens while the service is busy.
     Stall { id: i64, duration: Duration },
 }
@@ -90,9 +90,10 @@ pub fn answer(id: i64, kind: Kind, ms: f64, result: &str) -> String {
     format!("{{\"id\":{id},\"kind\":\"{}\",\"ms\":{ms:.3},\"result\":{result}}}", kind.name())
 }
 
-/// What a check that was dropped is answered with.
-fn superseded(id: i64, by: i64) -> String {
-    format!("{{\"id\":{id},\"kind\":\"check\",\"superseded\":true,\"by\":{by}}}")
+/// What makes a request one that a newer one may replace: its key, and the result it is given when it is replaced.
+pub struct Supersedes {
+    pub key: String,
+    pub superseded: String,
 }
 
 pub struct Shared {
@@ -125,16 +126,18 @@ impl Shared {
         self.replies.lock().expect("a thread that held the replies did not panic")
     }
 
-    /// Queues a job. A check that has not begun is replaced by a newer one; its asker is told.
+    /// Queues a job. A request with a supersede key that has not begun is replaced by a newer one with the key; its asker is told.
     pub fn push(&self, job: Job) {
         let mut queue = self.lock_queue();
-        if let Job::Ask { id: newer, kind: Kind::Check, .. } = &job {
-            let is_check = |queued: &Job| matches!(queued, Job::Ask { kind: Kind::Check, .. });
-            let dropped: Vec<i64> = queue.jobs.iter().filter(|queued| is_check(queued)).filter_map(Job::id).collect();
-            queue.jobs.retain(|queued| !is_check(queued));
+        if let Job::Ask { supersedes: Some(Supersedes { key, .. }), .. } = &job {
+            let same = |queued: &Job| matches!(queued, Job::Ask { supersedes: Some(older), .. } if older.key == *key);
+            let (dropped, kept): (VecDeque<Job>, VecDeque<Job>) = queue.jobs.drain(..).partition(same);
+            queue.jobs = kept;
             let mut replies = self.lock_replies();
             for older in dropped {
-                replies.push_back(superseded(older, *newer));
+                if let Job::Ask { id, kind, supersedes: Some(Supersedes { superseded, .. }), .. } = older {
+                    replies.push_back(answer(id, kind, 0.0, &superseded));
+                }
             }
         }
         queue.jobs.push_back(job);
@@ -248,7 +251,7 @@ fn serve(shared: &Arc<Shared>, stack_bytes: usize) {
                 let _ = service.handle(request);
                 shared.finish(None);
             }
-            Job::Ask { id, kind, request } => {
+            Job::Ask { id, kind, request, .. } => {
                 let started = Instant::now();
                 let result = service.handle(request);
                 let ms = started.elapsed().as_secs_f64() * MILLISECONDS_PER_SECOND;
@@ -322,7 +325,7 @@ mod tests {
     }
 
     fn ask(worker: &Worker, id: i64, kind: Kind, request: Request) {
-        worker.shared.push(Job::Ask { id, kind, request });
+        worker.shared.push(Job::Ask { id, kind, request, supersedes: None });
     }
 
     fn stall(worker: &Worker, id: i64, ms: u64) {
@@ -345,16 +348,22 @@ mod tests {
         assert!(second.contains("\"result\":{\"ok\":true,\"code\":"), "{second}");
     }
 
+    fn keyed(id: i64, key: &str) -> Job {
+        Job::Ask { id, kind: Kind::Query, request: Request::Ping, supersedes: Some(Supersedes { key: key.to_string(), superseded: format!("\"{key} {id}\"") }) }
+    }
+
     #[test]
-    fn a_check_that_has_not_begun_is_superseded() {
+    fn a_request_that_has_not_begun_is_superseded_by_a_newer_one_with_its_key() {
         let worker = Worker::start(STACK_BYTES);
         stall(&worker, 1, 300);
         running_is(&worker, 1);
-        worker.shared.push(Job::Ask { id: 2, kind: Kind::Check, request: Request::Ping });
-        worker.shared.push(Job::Ask { id: 3, kind: Kind::Check, request: Request::Ping });
-        // The older check is told at once, while the thread is still busy.
-        assert_eq!(worker.shared.poll().as_deref(), Some("{\"id\":2,\"kind\":\"check\",\"superseded\":true,\"by\":3}"));
+        worker.shared.push(keyed(2, "a"));
+        worker.shared.push(keyed(3, "b"));
+        worker.shared.push(keyed(4, "a"));
+        // The older request with key `a` is told at once, while the thread is still busy; `b` and the newer `a` stay queued.
+        assert_eq!(worker.shared.poll().as_deref(), Some("{\"id\":2,\"kind\":\"query\",\"ms\":0.000,\"result\":\"a 2\"}"));
         assert_eq!(worker.shared.poll(), None);
+        assert_eq!(worker.shared.state().queued, 2);
     }
 
     #[test]

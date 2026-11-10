@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseReply, type ProjectFile } from '../src/protocol';
 import { RequestCancelled, RequestScope } from '../src/scope';
-import { LspError, LspSession, fileUri, pathOfUri } from '../src/lsp';
+import { LspError, LspSession, SERVER_CANCELLED, fileUri, pathOfUri } from '../src/lsp';
 import { Tsc, type TscLink } from '../src/tsc';
 
 // The request machinery of the godot-tsc host (src/tsc.ts) against a service that the test holds: what a request
@@ -12,7 +12,7 @@ import { Tsc, type TscLink } from '../src/tsc';
 
 const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
-type Kind = 'compile' | 'check' | 'query' | 'ping' | 'stall';
+type Kind = 'compile' | 'query' | 'ping' | 'stall';
 
 class FakeService implements TscLink {
   readonly requests: { readonly id: number; readonly kind: Kind; readonly detail: string }[] = [];
@@ -40,10 +40,6 @@ class FakeService implements TscLink {
 
   requestCompile(path: string, source: string, refresh: boolean): number {
     return this.make('compile', `${path}|${source}|${refresh}`);
-  }
-
-  requestCheck(config: string, libDir: string): number {
-    return this.make('check', `${config}|${libDir}`);
   }
 
   requestQuery(requestJson: string): number {
@@ -188,8 +184,8 @@ test('closing the host fails every outstanding request as cancelled, stops the s
   const service = new FakeService();
   const host = new Tsc(service);
   const compile = host.transpile('/p/a.tsx', 'A', { reactRefresh: true }, new RequestScope());
-  const check = host.check({ config: '/p/tsconfig.json', libDir: '/libs' });
-  const results = Promise.allSettled([compile, check]);
+  const lsp = host.lsp({ jsonrpc: '2.0', id: 1, method: 'workspace/diagnostic', params: {} });
+  const results = Promise.allSettled([compile, lsp]);
   host.close();
   const settled = await results;
   assert.ok(settled.every(result => result.status === 'rejected' && result.reason instanceof RequestCancelled));
@@ -199,12 +195,23 @@ test('closing the host fails every outstanding request as cancelled, stops the s
   host.close();
 });
 
-test('a check that a newer one took the place of is answered as superseded', async () => {
+test('diagnostics that a newer request took the place of fail with ServerCancelled, and a check gives its time', async () => {
   const service = new FakeService();
   const host = new Tsc(service);
-  const older = host.check({ config: '/p/tsconfig.json', libDir: '/libs' });
-  service.answer(1, '{"id":1,"kind":"check","superseded":true,"by":2}');
-  assert.deepEqual(await older, { kind: 'superseded', by: 2 });
+  const session = new LspSession(host, { config: '/p/tsconfig.json', libDir: '/libs' });
+  const older = session.workspaceDiagnostics();
+  const newer = session.workspaceDiagnostics();
+  const rpcId = (index: number): unknown => JSON.parse(service.requests[index]?.detail ?? '{}').message.id;
+  const [first, second] = [service.requests[0], service.requests[1]];
+  assert.ok(first && second);
+  const [olderId, newerId] = [rpcId(0), rpcId(1)];
+  // What ext/queue.rs answers a dropped request with (core/lsp.rs: superseded_response).
+  const cancelled = { jsonrpc: '2.0', id: olderId, error: { code: SERVER_CANCELLED, message: 'replaced', data: { retriggerRequest: false } } };
+  const report = { items: [], filesLoaded: 3, incomplete: [] };
+  service.answer(first.id, JSON.stringify({ id: first.id, kind: 'query', ms: 0, result: { ok: true, messages: [cancelled] } }));
+  service.answer(second.id, JSON.stringify({ id: second.id, kind: 'query', ms: 7.5, result: { ok: true, messages: [{ jsonrpc: '2.0', id: newerId, result: report }] } }));
+  await assert.rejects(older, (error: unknown) => error instanceof LspError && error.code === SERVER_CANCELLED);
+  assert.deepEqual(await newer, { result: report, serviceMs: 7.5 });
 });
 
 test('the service answering a request with the wrong kind of reply fails that request and no other', async () => {
@@ -256,22 +263,13 @@ test('the replies of the service parse: compile, ping and stall', () => {
   assert.throws(() => parseReply('{"id":6,"kind":"nothing"}'), /not one/u);
 });
 
-test('a project asks its checks, hovers and inlay hints with its own configuration, and a transpile without options asks for no Fast Refresh', async () => {
+test('a transpile without options asks for no Fast Refresh', async () => {
   const service = new FakeService();
   const host = new Tsc(service);
-  const project = host.project({ config: '/p/tsconfig.json', libDir: '/libs' });
-  const check = project.check();
-  const hover = project.hover('/p/a.tsx', 7);
-  const hints = project.inlayHints('/p/a.tsx', { from: 0, to: 20 });
   const transpile = host.transpile('/p/a.tsx', 'A');
-  assert.deepEqual(service.requests.map(request => [request.kind, request.detail]), [
-    ['check', '/p/tsconfig.json|/libs'],
-    ['query', JSON.stringify({ op: 'hover', config: '/p/tsconfig.json', libDir: '/libs', path: '/p/a.tsx', offset: 7 })],
-    ['query', JSON.stringify({ op: 'inlayHints', config: '/p/tsconfig.json', libDir: '/libs', path: '/p/a.tsx', from: 0, to: 20, parameterNames: 'literals' })],
-    ['compile', '/p/a.tsx|A|false'],
-  ]);
+  assert.deepEqual(service.requests.map(request => [request.kind, request.detail]), [['compile', '/p/a.tsx|A|false']]);
   host.close();
-  for (const request of [check, hover, hints, transpile]) await assert.rejects(request, RequestCancelled);
+  await assert.rejects(transpile, RequestCancelled);
 });
 
 test('an LSP session sends each message as an lsp query, picks its response by id, and fails with the code a refusal has', async () => {
@@ -286,7 +284,7 @@ test('an LSP session sends each message as an lsp query, picks its response by i
   const lspOf = (index: number): Record<string, unknown> => JSON.parse(service.requests[index]?.detail ?? '{}').message;
 
   const initialized = session.initialize();
-  assert.deepEqual(lspOf(0).params, { processId: null, rootUri: null, capabilities: {}, initializationOptions: { config: '/p/tsconfig.json', libDir: '/libs' } });
+  assert.deepEqual(lspOf(0).params, { processId: null, rootUri: null, capabilities: {}, initializationOptions: { config: '/p/tsconfig.json', libDir: '/libs', inlayParameterNames: 'literals' } });
   answer(0, [{ jsonrpc: '2.0', id: lspOf(0).id, result: { capabilities: { definitionProvider: true } } }]);
   // `initialized` follows `initialize`'s answer, as a notification.
   while (service.requests.length === 0) await pause(1);

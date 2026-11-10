@@ -461,6 +461,8 @@ pub fn check(host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8]) 
     checker.begin_stack_budget();
     let mut checked = Vec::new();
     let mut incomplete = Vec::new();
+    // The project's own sources that were checked: an editor clears the diagnostics of those that have none now.
+    let mut sources = Vec::new();
 
     for i in 0..program.files.modules.len() {
         let module = &program.files.modules[i];
@@ -476,6 +478,9 @@ pub fn check(host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8]) 
             let problems = texts(problems);
             assert!(problems.is_empty(), "reference errors in {}: {problems:?}", String::from_utf8_lossy(module.file_name()));
             checked.push((file, checker.check_file(file)));
+            if matches!(module.hir.kind, FileKind::Ts | FileKind::Tsx) {
+                sources.push(module.file_name());
+            }
 
             if checker.take_ran_out_of_stack() {
                 incomplete.push(module.file_name());
@@ -547,6 +552,13 @@ pub fn check(host: &MemoryHost, runs: &mut Runs, config: &[u8], lib_dir: &[u8]) 
     out.push_str(&format!("],\"filesLoaded\":{},\"incomplete\":[", program.files.modules.len()));
 
     for (i, path) in incomplete.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        string(&mut out, path);
+    }
+    out.push_str("],\"files\":[");
+    for (i, path) in sources.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }

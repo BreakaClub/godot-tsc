@@ -124,7 +124,10 @@ test('initialize names the project and says what is served; a request before it 
   assert.equal(before?.[0]?.error?.code, -32002);
   const [initialized] = await session([request('initialize', { capabilities: {}, initializationOptions: { config: '/project/tsconfig.json', libDir: '/lib' } })], { initialize: false });
   const capabilities = (result<{ capabilities: Record<string, unknown> }>(initialized ?? [])).capabilities;
-  for (const name of ['definitionProvider', 'typeDefinitionProvider', 'referencesProvider', 'documentHighlightProvider', 'hoverProvider']) assert.equal(capabilities[name], true, name);
+  for (const name of ['definitionProvider', 'typeDefinitionProvider', 'referencesProvider', 'documentHighlightProvider', 'hoverProvider', 'inlayHintProvider']) assert.equal(capabilities[name], true, name);
+  assert.deepEqual(capabilities.completionProvider, { triggerCharacters: ['.'] });
+  assert.deepEqual(capabilities.signatureHelpProvider, { triggerCharacters: ['(', ','] });
+  assert.deepEqual(capabilities.diagnosticProvider, { interFileDependencies: true, workspaceDiagnostics: true });
   assert.deepEqual(capabilities.renameProvider, { prepareProvider: true });
   assert.equal(capabilities.positionEncoding, 'utf-16');
 });
@@ -287,4 +290,99 @@ test('an import that renames, class members, a private name, an enum member and 
   assert.deepEqual(result<Location[]>(speed ?? []).map(line), ['c:10:speed']);
   assert.deepEqual(result<Location[]>(square ?? []).map(line), ['c:2:Square']);
   assert.deepEqual(result<Location[]>(unit ?? []).map(line).sort(), ['c:10:unit', 'c:5:unit']);
+});
+
+/** A full change of b.ts to `text`, as a notification. */
+function changeB(text: string, version = 2): object {
+  return { jsonrpc: '2.0', method: 'textDocument/didChange', params: { textDocument: { uri: B_URI, version }, contentChanges: [{ text }] } };
+}
+
+interface CompletionList { readonly items: readonly { readonly label: string; readonly kind: number; readonly detail?: string; readonly sortText: string; readonly textEdit: { readonly range: Range } }[] }
+
+test("completion after a dot lists the properties of the expression's type, with their types, replacing what is typed", { skip: SKIP }, async () => {
+  const dotted = `${B}export const w = target.;\n`;
+  const typing = `${B}export const v = target.y;\n`;
+  const [, afterDot, , typed] = await session([
+    changeB(dotted),
+    request('textDocument/completion', { textDocument: { uri: B_URI }, position: at(dotted, 'target.;', 0, 'target.'.length) }),
+    changeB(typing, 3),
+    request('textDocument/completion', { textDocument: { uri: B_URI }, position: at(typing, 'v = target.y;', 0, 'v = target.y'.length) }),
+  ]);
+  const members = result<CompletionList>(afterDot ?? []).items;
+  assert.deepEqual(members.map(item => `${item.label}:${item.kind}:${item.detail ?? ''}`), ['x:10:number', 'y:10:number']);
+  const replacing = result<CompletionList>(typed ?? []).items;
+  assert.deepEqual(replacing.map(item => item.label), ['x', 'y']);
+  // The item replaces the `y` being typed.
+  const line = typing.split('\n').length - 2;
+  assert.deepEqual(replacing[0]?.textEdit.range, { start: { line, character: 'export const v = target.'.length }, end: { line, character: 'export const v = target.y'.length } });
+});
+
+test('completion elsewhere lists what is in scope: the project first, then the lib files, then keywords; types where a type goes; nothing in a comment', { skip: SKIP }, async () => {
+  const text = `${B}const p: Po;\n// in a comment: \n`;
+  const [, values, types, comment] = await session([
+    changeB(text),
+    request('textDocument/completion', { textDocument: { uri: B_URI }, position: at(text, 'export const sum', 0, 'export const '.length) }),
+    request('textDocument/completion', { textDocument: { uri: B_URI }, position: at(text, 'Po;', 0, 2) }),
+    request('textDocument/completion', { textDocument: { uri: B_URI }, position: at(text, 'comment: ', 0, 'comment: '.length) }),
+  ]);
+  const inScope = result<CompletionList>(values ?? []).items;
+  const sorted = [...inScope].sort((a, b) => a.sortText.localeCompare(b.sortText));
+  const index = (label: string): number => sorted.findIndex(item => item.label === label);
+  for (const name of ['distance', 'origin', 'target', 'x', 'y', 'Math', 'Array', 'const', 'return']) assert.notEqual(index(name), -1, `${name} is offered`);
+  assert.ok(index('distance') < index('Math') && index('Math') < index('const'), 'the project, then the lib files, then keywords');
+  assert.equal(inScope.find(item => item.label === 'distance')?.detail, '(a: Point, b: Point) => number');
+  assert.equal(inScope.find(item => item.label === 'Point'), undefined, 'a type is not offered where a value goes');
+  const typeNames = result<CompletionList>(types ?? []).items.map(item => item.label);
+  assert.ok(typeNames.includes('Point') && typeNames.includes('Array'), typeNames.join());
+  assert.ok(!typeNames.includes('distance') && !typeNames.includes('const'), 'no values or keywords where a type goes');
+  assert.deepEqual(result<CompletionList>(comment ?? []).items, []);
+});
+
+interface SignatureHelp { readonly signatures: readonly { readonly label: string; readonly parameters: readonly { readonly label: readonly [number, number] }[] }[]; readonly activeSignature: number; readonly activeParameter: number }
+
+test('signature help names the call the caret is in, and the argument it is at, a rest parameter taking the rest', { skip: SKIP }, async () => {
+  const text = `${B}Math.max(1, 2, 3);\n`;
+  const [, second, rest, outside] = await session([
+    changeB(text),
+    request('textDocument/signatureHelp', { textDocument: { uri: B_URI }, position: at(text, 'distance(origin, target)', 0, 'distance(origin, '.length) }),
+    request('textDocument/signatureHelp', { textDocument: { uri: B_URI }, position: at(text, 'max(1, 2, 3)', 0, 'max(1, 2, '.length) }),
+    request('textDocument/signatureHelp', { textDocument: { uri: B_URI }, position: at(text, 'const x') }),
+  ]);
+  const help = result<SignatureHelp>(second ?? []);
+  const [signature] = help.signatures;
+  assert.equal(signature?.label, 'distance(a: Point, b: Point): number');
+  assert.deepEqual(signature?.parameters.map(parameter => signature.label.slice(...parameter.label)), ['a: Point', 'b: Point']);
+  assert.equal(help.activeParameter, 1);
+  const max = result<SignatureHelp>(rest ?? []);
+  assert.equal(max.signatures[max.activeSignature]?.label, 'max(...values: number[]): number');
+  assert.equal(max.activeParameter, 0);
+  assert.equal(result<SignatureHelp | null>(outside ?? []), null);
+});
+
+test('inlay hints are the inferred types of declarations that name none, after the name', { skip: SKIP }, async () => {
+  const lines = B.split('\n').length;
+  const [hints] = await session([request('textDocument/inlayHint', { textDocument: { uri: B_URI }, range: { start: { line: 0, character: 0 }, end: { line: lines, character: 0 } } })]);
+  const found = result<{ position: Position; label: string; kind: number }[]>(hints ?? []);
+  assert.deepEqual(found.map(hint => `${hint.position.line}:${hint.position.character}:${hint.label}:${hint.kind}`), [
+    `${at(B, 'd =').line}:${at(B, 'd =').character + 1}:: number:1`,
+    `${at(B, 'sum =').line}:${at(B, 'sum =').character + 3}:: number:1`,
+  ]);
+});
+
+interface Diagnostic { readonly range: Range; readonly severity: number; readonly code: number; readonly source: string; readonly message: string }
+
+test('diagnostics: a file\'s, and every source\'s, with the clean ones listed empty', { skip: SKIP }, async () => {
+  const text = `${B}const bad: string = d;\n`;
+  const [, document, workspace] = await session([
+    changeB(text),
+    request('textDocument/diagnostic', { textDocument: { uri: B_URI } }),
+    request('workspace/diagnostic', { previousResultIds: [] }),
+  ]);
+  const report = result<{ kind: string; items: Diagnostic[] }>(document ?? []);
+  assert.equal(report.kind, 'full');
+  assert.deepEqual(report.items.map(d => [d.code, d.severity, d.source, covered(text, d.range)]), [[2322, 1, 'ts', 'bad']]);
+  assert.match(report.items[0]?.message ?? '', /Type 'number' is not assignable to type 'string'/u);
+  const all = result<{ items: { uri: string; kind: string; items: Diagnostic[] }[]; filesLoaded: number }>(workspace ?? []);
+  assert.deepEqual(all.items.map(item => [item.uri, item.items.length]).sort(), [[A_URI, 0], [B_URI, 1]]);
+  assert.ok(all.filesLoaded > 2);
 });

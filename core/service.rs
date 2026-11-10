@@ -1,7 +1,7 @@
 //! The stateful side of the library: the checker's project (the files in memory and what has been parsed of them) and the
 //! requests that read or change it. A [`Service`] belongs to one thread, which is why nothing here is `Sync`.
 
-use crate::check::{self, MemoryHost, Runs};
+use crate::check::{MemoryHost, Runs};
 use crate::protocol::{Diagnostic, Done, Failed, FileText, Pong, Request, Response, Severity};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -75,20 +75,9 @@ impl Service {
                 self.host.remove(path.as_bytes());
                 to_json(&Response::Done(Done { ok: true }))
             }
-            Request::Hover { config, lib_dir, path, offset } => {
-                crate::services::hover(&self.host, &mut self.runs, config.as_bytes(), lib_dir.as_bytes(), path.as_bytes(), offset)
-            }
-            Request::InlayHints { config, lib_dir, path, from, to, parameter_names } => {
-                let file = crate::services::FileInProject { config: config.as_bytes(), lib_dir: lib_dir.as_bytes(), path: path.as_bytes() };
-                crate::services::inlay_hints(&self.host, &mut self.runs, &file, (from, to), parameter_names)
-            }
             Request::Lsp { message } => {
                 let messages = self.lsp.handle(&mut self.host, &mut self.runs, &message);
                 serde_json::json!({ "ok": true, "messages": messages }).to_string()
-            }
-            Request::Check { config, lib_dir } => {
-                let report = check::check(&self.host, &mut self.runs, config.as_bytes(), lib_dir.as_bytes());
-                format!("{{\"ok\":true,\"report\":{report}}}")
             }
         }
     }

@@ -6,16 +6,20 @@
 //! and `libDir` (where its lib files are). A document is a `file://` URI whose path is the file's path (`file:///project/main.ts` is
 //! `/project/main.ts`); opening or changing one sets that file's text, as `setFile` does. Positions are UTF-16 (`positionEncoding`).
 //!
-//! Requests: `initialize`, `shutdown`, `textDocument/hover`, `definition`, `typeDefinition`, `references`, `documentHighlight`,
-//! `prepareRename` and `rename`. Notifications: `initialized`, `exit`, `textDocument/didOpen`, `didChange` (full or incremental) and
-//! `didClose` (the file stays in the project: it is closed in the editor, not deleted).
+//! Requests: `initialize`, `shutdown`, `textDocument/hover`, `completion`, `signatureHelp`, `inlayHint`, `diagnostic`, `definition`,
+//! `typeDefinition`, `references`, `documentHighlight`, `prepareRename`, `rename`, and `workspace/diagnostic`. Notifications:
+//! `initialized`, `exit`, `textDocument/didOpen`, `didChange` (full or incremental) and `didClose` (the file stays in the project: it is
+//! closed in the editor, not deleted).
+//!
+//! Diagnostics are pulled (`textDocument/diagnostic`, `workspace/diagnostic`): a check of the whole project, whose report is the
+//! file's or every source's. The extension drops a diagnostics request that has not begun when a newer one for the same document comes,
+//! and answers it with `ServerCancelled` (`ext/queue.rs`).
 
 use crate::check::{MemoryHost, Positions, Runs};
 use crate::navigate::{self, At, Occurrence, Place};
 use serde_json::{Value, json};
 
 /// JSON-RPC's and LSP's error codes.
-const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
@@ -36,6 +40,77 @@ pub struct Lsp {
 struct Project {
     config: Vec<u8>,
     lib_dir: Vec<u8>,
+    /// Which arguments inlay hints name (`initializationOptions.inlayParameterNames`: `none`, `literals`, the default, or `all`).
+    parameter_names: crate::services::ParameterNames,
+}
+
+/// LSP's `InlayHintKind`.
+const INLAY_TYPE: u8 = 1;
+const INLAY_PARAMETER: u8 = 2;
+
+/// TypeScript's `DiagnosticCategory` (`Warning`, `Error`, `Suggestion`, `Message`) as LSP's `DiagnosticSeverity`.
+fn severity(category: u64) -> u8 {
+    const LSP_ERROR: u8 = 1;
+    const LSP_WARNING: u8 = 2;
+    const LSP_INFORMATION: u8 = 3;
+    const LSP_HINT: u8 = 4;
+    match category {
+        0 => LSP_WARNING,
+        1 => LSP_ERROR,
+        2 => LSP_HINT,
+        _ => LSP_INFORMATION,
+    }
+}
+
+/// The LSP range of a diagnostic of the checker's report (`startPosition`, `endPosition`), or the file's start for one without.
+fn diagnostic_range(diagnostic: &Value) -> Value {
+    let position = |name: &str| {
+        let line = diagnostic.pointer(&format!("/{name}/line")).and_then(Value::as_u64).unwrap_or(0);
+        let character = diagnostic.pointer(&format!("/{name}/character")).and_then(Value::as_u64).unwrap_or(0);
+        json!({ "line": line, "character": character })
+    };
+    json!({ "start": position("startPosition"), "end": position("endPosition") })
+}
+
+/// A diagnostic of the checker's report as LSP's.
+fn lsp_diagnostic(diagnostic: &Value) -> Value {
+    let related: Vec<Value> = diagnostic.get("relatedInformation").and_then(Value::as_array).into_iter().flatten()
+        .filter_map(|related| {
+            let path = related.get("fileName").and_then(Value::as_str)?;
+            Some(json!({
+                "location": { "uri": uri_of(path), "range": diagnostic_range(related) },
+                "message": related.get("messageText").and_then(Value::as_str).unwrap_or_default(),
+            }))
+        })
+        .collect();
+    let mut out = json!({
+        "range": diagnostic_range(diagnostic),
+        "severity": severity(diagnostic.get("category").and_then(Value::as_u64).unwrap_or(1)),
+        "code": diagnostic.get("code").cloned().unwrap_or(Value::Null),
+        "source": "ts",
+        "message": diagnostic.get("messageText").and_then(Value::as_str).unwrap_or_default(),
+    });
+    if !related.is_empty() {
+        out["relatedInformation"] = Value::Array(related);
+    }
+    out
+}
+
+/// `(line, character)` of a UTF-16 offset of `text`.
+fn line_character(text: &[u8], units: usize) -> (usize, usize) {
+    let mut seen = 0;
+    let mut byte = text.len();
+    for (at, &b) in text.iter().enumerate() {
+        if b & 0xC0 != 0x80 {
+            if seen >= units {
+                byte = at;
+                break;
+            }
+            seen += if b >= 0xF0 { 2 } else { 1 };
+        }
+    }
+    let (_, line, character) = Positions::new(text).of(byte as u32);
+    (line, character)
 }
 
 /// A request or notification that could not be served, as JSON-RPC reports it.
@@ -126,11 +201,6 @@ impl Lsp {
         vec![response]
     }
 
-    /// The response to a message that is not JSON.
-    pub fn parse_error(error: &serde_json::Error) -> Value {
-        json!({ "jsonrpc": "2.0", "id": Value::Null, "error": { "code": PARSE_ERROR, "message": format!("the message is not JSON: {error}") } })
-    }
-
     fn serve(&mut self, host: &mut MemoryHost, runs: &mut Runs, method: &str, params: &Value) -> Result<Value, Refusal> {
         match method {
             "initialize" => return self.initialize(params),
@@ -204,6 +274,93 @@ impl Lsp {
                     _ => Ok(Value::Null),
                 }
             }
+            "textDocument/completion" => {
+                let (path, (line, character)) = at(params)?;
+                let at = At { config: &project.config, lib_dir: &project.lib_dir, path: path.as_bytes(), line, character };
+                let found = crate::complete::completions(host, runs, &at);
+                let (start, end) = found.replace;
+                let replace = json!({ "start": { "line": start.0, "character": start.1 }, "end": { "line": end.0, "character": end.1 } });
+                let items: Vec<Value> = found.items.iter().map(|item| {
+                    let mut out = json!({
+                        "label": item.label,
+                        "kind": item.kind as u8,
+                        "sortText": format!("{}{}", item.sort, item.label),
+                        "textEdit": { "range": replace, "newText": item.label },
+                    });
+                    if let Some(detail) = &item.detail {
+                        out["detail"] = Value::String(detail.clone());
+                    }
+                    out
+                }).collect();
+                Ok(json!({ "isIncomplete": false, "items": items }))
+            }
+            "textDocument/signatureHelp" => {
+                let (path, (line, character)) = at(params)?;
+                let at = At { config: &project.config, lib_dir: &project.lib_dir, path: path.as_bytes(), line, character };
+                let Some(help) = crate::complete::signature_help(host, runs, &at) else {
+                    return Ok(Value::Null);
+                };
+                let active = help.signatures.get(help.active_signature);
+                // A rest parameter takes every argument from its own on.
+                let active_parameter = match active.and_then(|signature| signature.rest) {
+                    Some(rest) if help.active_parameter > rest => rest,
+                    _ => help.active_parameter,
+                };
+                let signatures: Vec<Value> = help.signatures.iter().map(|signature| json!({
+                    "label": signature.label,
+                    "parameters": signature.parameters.iter().map(|&(from, to)| json!({ "label": [from, to] })).collect::<Vec<_>>(),
+                })).collect();
+                Ok(json!({ "signatures": signatures, "activeSignature": help.active_signature, "activeParameter": active_parameter }))
+            }
+            "textDocument/inlayHint" => {
+                let path = text_document_path(params)?;
+                let text = host.text(path.as_bytes()).ok_or_else(|| refuse(INVALID_PARAMS, format!("{path} is not in the project")))?.to_vec();
+                let positions = Positions::new(&text);
+                let offset = |pointer: &str| -> Result<usize, Refusal> {
+                    let number = |name: &str| params.pointer(&format!("/range/{pointer}/{name}")).and_then(Value::as_u64).map(|n| n as usize);
+                    match (number("line"), number("character")) {
+                        (Some(line), Some(character)) => Ok(positions.of(positions.byte_at(line, character) as u32).0),
+                        _ => Err(refuse(INVALID_PARAMS, "range is missing")),
+                    }
+                };
+                let (from, to) = (offset("start")?, offset("end")?);
+                let file = crate::services::FileInProject { config: &project.config, lib_dir: &project.lib_dir, path: path.as_bytes() };
+                let hints = crate::services::inlay_hints(host, runs, &file, (from, to), project.parameter_names);
+                let hints: Value = serde_json::from_str(&hints).map_err(|error| refuse(REQUEST_FAILED, error.to_string()))?;
+                let hints: Vec<Value> = hints.get("hints").and_then(Value::as_array).into_iter().flatten().map(|hint| {
+                    let (line, character) = line_character(&text, hint.get("position").and_then(Value::as_u64).unwrap_or(0) as usize);
+                    let is_type = hint.get("kind").and_then(Value::as_str) == Some("type");
+                    json!({
+                        "position": { "line": line, "character": character },
+                        "label": hint.get("label").and_then(Value::as_str).unwrap_or_default(),
+                        "kind": if is_type { INLAY_TYPE } else { INLAY_PARAMETER },
+                        "paddingRight": !is_type,
+                    })
+                }).collect();
+                Ok(Value::Array(hints))
+            }
+            "textDocument/diagnostic" | "workspace/diagnostic" => {
+                let report = crate::check::check(host, runs, &project.config, &project.lib_dir);
+                let report: Value = serde_json::from_str(&report).map_err(|error| refuse(REQUEST_FAILED, error.to_string()))?;
+                let diagnostics = report.get("diagnostics").and_then(Value::as_array).cloned().unwrap_or_default();
+                let of = |path: &str| -> Vec<Value> {
+                    diagnostics.iter().filter(|d| d.get("fileName").and_then(Value::as_str) == Some(path)).map(lsp_diagnostic).collect()
+                };
+                if method == "textDocument/diagnostic" {
+                    let path = text_document_path(params)?;
+                    return Ok(json!({ "kind": "full", "items": of(&path) }));
+                }
+                let mut paths: Vec<String> = report.get("files").and_then(Value::as_array).into_iter().flatten()
+                    .filter_map(|path| path.as_str().map(str::to_string)).collect();
+                for diagnostic in &diagnostics {
+                    if let Some(path) = diagnostic.get("fileName").and_then(Value::as_str) && !paths.iter().any(|p| p == path) {
+                        paths.push(path.to_string());
+                    }
+                }
+                let items: Vec<Value> = paths.iter().map(|path| json!({ "uri": uri_of(path), "kind": "full", "version": Value::Null, "items": of(path) })).collect();
+                // Beyond LSP: what the check saw, for a host that shows it (files in the program, those it ran out of stack in).
+                Ok(json!({ "items": items, "filesLoaded": report.get("filesLoaded"), "incomplete": report.get("incomplete") }))
+            }
             "textDocument/definition" | "textDocument/typeDefinition" => {
                 let (path, (line, character)) = at(params)?;
                 let at = At { config: &project.config, lib_dir: &project.lib_dir, path: path.as_bytes(), line, character };
@@ -258,7 +415,13 @@ impl Lsp {
         let (Some(config), Some(lib_dir)) = (option("config"), option("libDir")) else {
             return Err(refuse(INVALID_PARAMS, "initializationOptions needs config (the tsconfig's path) and libDir (where the lib files are)"));
         };
-        self.project = Some(Project { config, lib_dir });
+        let parameter_names = match params.pointer("/initializationOptions/inlayParameterNames").and_then(Value::as_str) {
+            None | Some("literals") => crate::services::ParameterNames::Literals,
+            Some("none") => crate::services::ParameterNames::None,
+            Some("all") => crate::services::ParameterNames::All,
+            Some(other) => return Err(refuse(INVALID_PARAMS, format!("inlayParameterNames is none, literals or all, not {other}"))),
+        };
+        self.project = Some(Project { config, lib_dir, parameter_names });
         self.shut_down = false;
         Ok(json!({
             "capabilities": {
@@ -266,6 +429,10 @@ impl Lsp {
                 // Incremental: a change carries the range it replaces.
                 "textDocumentSync": { "openClose": true, "change": 2 },
                 "hoverProvider": true,
+                "completionProvider": { "triggerCharacters": ["."] },
+                "signatureHelpProvider": { "triggerCharacters": ["(", ","] },
+                "inlayHintProvider": true,
+                "diagnosticProvider": { "interFileDependencies": true, "workspaceDiagnostics": true },
                 "definitionProvider": true,
                 "typeDefinitionProvider": true,
                 "referencesProvider": true,
@@ -281,4 +448,29 @@ impl Lsp {
 fn set_text(host: &mut MemoryHost, runs: &mut Runs, path: &str, text: Vec<u8>) {
     runs.forget_for(path.as_bytes());
     host.set(path.as_bytes().to_vec(), text);
+}
+
+/// LSP's `ServerCancelled`: the server cancelled the request, and the client asks again when it wants to.
+const SERVER_CANCELLED: i64 = -32802;
+
+/// What a queue of requests may drop a message for: a diagnostics request is replaced by a newer one for the same document (or for the
+/// workspace) that comes before it has begun. Two messages with the same key are the same question asked again.
+pub fn supersede_key(message: &Value) -> Option<String> {
+    let method = message.get("method").and_then(Value::as_str)?;
+    message.get("id")?;
+    match method {
+        "workspace/diagnostic" => Some(method.to_string()),
+        "textDocument/diagnostic" => Some(format!("{method} {}", message.pointer("/params/textDocument/uri")?.as_str()?)),
+        _ => None,
+    }
+}
+
+/// The response (as the service's `{"ok":true,"messages":[...]}`) to a message dropped for a newer one with its key: `ServerCancelled`.
+pub fn superseded_response(message: &Value) -> String {
+    let id = message.get("id").cloned().unwrap_or(Value::Null);
+    let cancelled = json!({
+        "jsonrpc": "2.0", "id": id,
+        "error": { "code": SERVER_CANCELLED, "message": "a newer request for the same diagnostics took this one's place", "data": { "retriggerRequest": false } },
+    });
+    json!({ "ok": true, "messages": [cancelled] }).to_string()
 }

@@ -1,6 +1,5 @@
 import {
-  parseHover, parseInlayHints, parseLspMessages, parseReply, parseServiceState, type CheckOutcome, type TranspileResult, type Hover, type InlayHint, type LspMessage, type ParameterNames, type Pong, type ProjectFile,
-  type Reply, type ServiceState,
+  parseLspMessages, parseReply, parseServiceState, type LspMessage, type Pong, type ProjectFile, type Reply, type ServiceState, type TranspileResult,
 } from './protocol';
 import { RequestCancelled, type RequestScope } from './scope';
 
@@ -17,7 +16,6 @@ export interface TscLink {
   removeFile(path: string): void;
   requestPing(): number;
   requestCompile(path: string, source: string, refresh: boolean): number;
-  requestCheck(config: string, libDir: string): number;
   requestQuery(requestJson: string): number;
   requestStall(milliseconds: number): number;
   cancel(id: number): boolean;
@@ -54,7 +52,7 @@ class Deadline {
  */
 export const REQUEST_DEADLINE_MS = 30_000;
 
-/** The project a check, a hover or a set of inlay hints is asked of: its configuration file and the directory of its lib files. */
+/** The project a language server session (`LspSession`) serves: its configuration file and the directory of its lib files. */
 export interface ProjectOptions {
   /** The absolute path of the project's tsconfig.json in the checker's files (`/project/tsconfig.json`). */
   readonly config: string;
@@ -67,14 +65,15 @@ export interface TranspileOptions {
   readonly reactRefresh?: boolean;
 }
 
-/** The inclusive-exclusive UTF-16 range of a file that inlay hints are asked for. */
-export interface TextRange {
-  readonly from: number;
-  readonly to: number;
+/** What the language server sent back for one message, and the time the service thread took over it, from its own clock (the answer
+ * reaches JavaScript a frame later at the soonest). */
+export interface LspReply {
+  readonly messages: readonly LspMessage[];
+  readonly serviceMs: number;
 }
 
 /**
- * Bun's TypeScript checker and transpiler, behind typed calls. **No call waits for the service thread.** Calls that change the files
+ * Bun's TypeScript transpiler, and its checker behind a language server. **No call waits for the service thread.** Calls that change the files
  * (`setFile`, `setFiles`, `removeFile`) return at once; the others return a promise that is settled on a frame after the service thread has
  * answered, and the frame goes on meanwhile. A browser starts the service thread only when the page's own thread returns to its event loop,
  * so a call that waited for it could stall the page for as long as the browser takes to start a thread.
@@ -91,42 +90,14 @@ export interface TscHost {
   removeFile(path: string): void;
   /** One file's JavaScript, as a function body over `require`, `exports` and `module`: Bun's parser and printer. Syntax only: it type-checks nothing. */
   transpile(path: string, source: string, options?: TranspileOptions, scope?: RequestScope): Promise<TranspileResult>;
-  /** Type-checks the project. A check that has not begun when the next is asked for is answered as superseded. */
-  check(project: ProjectOptions, scope?: RequestScope): Promise<CheckOutcome>;
-  /** What is under `offset` (UTF-16) in the file at `path`: the name and its type. */
-  hover(project: ProjectOptions, path: string, offset: number, scope?: RequestScope): Promise<Hover | null>;
-  /** The inferred types of declarations and the parameter names of arguments in `range` of the file at `path`. */
-  inlayHints(project: ProjectOptions, path: string, range: TextRange, parameterNames: ParameterNames, scope?: RequestScope): Promise<InlayHint[]>;
   /**
    * One Language Server Protocol message for the service's language server (a request or a notification), and the messages it sends back:
-   * the response to a request among them. `LspSession` (`lsp.ts`) speaks it with ids and typed results.
+   * the response to a request among them. `LspSession` (`lsp.ts`) speaks it with ids and typed results. A diagnostics request that has not
+   * begun when a newer one for the same document is sent is answered with `ServerCancelled`.
    */
-  lsp(message: LspMessage, scope?: RequestScope): Promise<LspMessage[]>;
+  lsp(message: LspMessage, scope?: RequestScope): Promise<LspReply>;
   /** Ends the service. Every request still outstanding fails with `RequestCancelled`. */
   close(): void;
-}
-
-/** One project of a `TscHost`: its checks, hovers and inlay hints without its configuration repeated on each call. The files are the host's. */
-export class TscProject {
-  readonly host: TscHost;
-  readonly options: ProjectOptions;
-
-  constructor(host: TscHost, options: ProjectOptions) {
-    this.host = host;
-    this.options = options;
-  }
-
-  check(scope?: RequestScope): Promise<CheckOutcome> {
-    return this.host.check(this.options, scope);
-  }
-
-  hover(path: string, offset: number, scope?: RequestScope): Promise<Hover | null> {
-    return this.host.hover(this.options, path, offset, scope);
-  }
-
-  inlayHints(path: string, range: TextRange, parameterNames: ParameterNames = 'literals', scope?: RequestScope): Promise<InlayHint[]> {
-    return this.host.inlayHints(this.options, path, range, parameterNames, scope);
-  }
 }
 
 /** A request that has been made and not answered. */
@@ -152,11 +123,6 @@ export class Tsc implements TscHost {
     this.deadlineMs = deadlineMs;
   }
 
-  /** The project whose configuration is `options.config`, for its checks, hovers and inlay hints. */
-  project(options: ProjectOptions): TscProject {
-    return new TscProject(this, options);
-  }
-
   setFile(path: string, text: string): void {
     this.service.setFile(path, text);
   }
@@ -179,21 +145,9 @@ export class Tsc implements TscHost {
     return this.ask('compile', () => this.service.requestCompile(path, source, reactRefresh), scope).then(reply => ({ result: reply.result, serviceMs: reply.serviceMs }));
   }
 
-  check(project: ProjectOptions, scope?: RequestScope): Promise<CheckOutcome> {
-    return this.ask('check', () => this.service.requestCheck(project.config, project.libDir), scope).then(reply => reply.outcome);
-  }
-
-  hover(project: ProjectOptions, path: string, offset: number, scope?: RequestScope): Promise<Hover | null> {
-    return this.query({ op: 'hover', config: project.config, libDir: project.libDir, path, offset }, scope).then(parseHover);
-  }
-
-  inlayHints(project: ProjectOptions, path: string, range: TextRange, parameterNames: ParameterNames, scope?: RequestScope): Promise<InlayHint[]> {
-    const request = { op: 'inlayHints', config: project.config, libDir: project.libDir, path, from: range.from, to: range.to, parameterNames };
-    return this.query(request, scope).then(parseInlayHints);
-  }
-
-  lsp(message: LspMessage, scope?: RequestScope): Promise<LspMessage[]> {
-    return this.query({ op: 'lsp', message }, scope).then(parseLspMessages);
+  lsp(message: LspMessage, scope?: RequestScope): Promise<LspReply> {
+    return this.ask('query', () => this.service.requestQuery(JSON.stringify({ op: 'lsp', message })), scope)
+      .then(reply => ({ messages: parseLspMessages(reply.result), serviceMs: reply.serviceMs }));
   }
 
   /** Asks the library its name and the Bun revision it is made from. */
@@ -226,10 +180,6 @@ export class Tsc implements TscHost {
       request.reject(new RequestCancelled());
     }
     this.service.stop();
-  }
-
-  private query(request: Record<string, unknown>, scope: RequestScope | undefined): Promise<Record<string, unknown>> {
-    return this.ask('query', () => this.service.requestQuery(JSON.stringify(request)), scope).then(reply => reply.result);
   }
 
   /**

@@ -22,32 +22,10 @@ pub enum Request {
     RemoveFile {
         path: String,
     },
-    /// Checks the project whose configuration file is at `config`, with the lib files in `lib_dir`.
-    Check {
-        config: String,
-        lib_dir: String,
-    },
-    /// What is under `offset` (UTF-16) in the file at `path`: the name and the type (`services::hover`).
-    Hover {
-        config: String,
-        lib_dir: String,
-        path: String,
-        offset: usize,
-    },
     /// One Language Server Protocol message (a JSON-RPC request or notification) for the service's language server (`lsp.rs`). The
     /// response is `{"ok":true,"messages":[...]}`: what the server sends back, the response to a request among them.
     Lsp {
         message: serde_json::Value,
-    },
-    /// The inlay hints between UTF-16 offsets `from` and `to` of the file at `path` (`services::inlay_hints`).
-    InlayHints {
-        config: String,
-        lib_dir: String,
-        path: String,
-        from: usize,
-        to: usize,
-        #[serde(default = "default_parameter_names")]
-        parameter_names: crate::services::ParameterNames,
     },
 }
 
@@ -134,8 +112,4 @@ pub struct Diagnostic {
     pub character: usize,
     pub severity: Severity,
     pub message: String,
-}
-
-fn default_parameter_names() -> crate::services::ParameterNames {
-    crate::services::ParameterNames::Literals
 }

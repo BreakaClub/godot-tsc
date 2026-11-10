@@ -6,6 +6,7 @@
 #![feature(linkage)] // Bun's native shims are weak symbols (`native.rs`)
 
 pub mod check;
+mod complete;
 mod lower;
 mod lsp;
 mod navigate;
@@ -13,12 +14,13 @@ pub mod native;
 mod positions;
 pub mod protocol;
 mod service;
-pub mod services;
+mod services;
 mod symbols;
 mod transpile;
 #[cfg(target_family = "wasm")]
 pub mod wasm;
 
+pub use lsp::{superseded_response, supersede_key};
 pub use service::{Service, failure};
 
 /// The stack that a request may use (the parser, the printer and the checker recurse on the program's depth): the 8 MB of

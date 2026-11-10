@@ -6,12 +6,10 @@ godot-tsc is a GDExtension that runs [Bun](https://github.com/oven-sh/bun)'s Typ
 [typescript-go](https://github.com/microsoft/typescript-go)) and its JavaScript parser and printer on a thread of their own, with a typed,
 non-blocking API for [GodotJS](https://github.com/godotjs/GodotJS) code. Give it a project's files and it:
 
-- **type-checks** them and reports TypeScript's diagnostics, with positions;
 - **transpiles** TS/TSX to a CommonJS-shaped function body you can run in the live JavaScript realm, optionally instrumented for React
   Fast Refresh;
-- answers **hover** (the name and type at an offset) and **inlay hint** queries;
-- runs a **language server** (LSP): go to definition and type definition, find references, document highlights and rename, across the
-  project's files.
+- runs a **language server** (LSP) over them: TypeScript's diagnostics, completion, signature help, hover, inlay hints, go to definition
+  and type definition, find references, document highlights and rename.
 
 Nothing waits for it: every request is answered on a later frame, natively and on the Web. It is for in-game code editors, live
 scripting and modding tools, and anything else that needs TypeScript's answers while the game runs.
@@ -51,7 +49,7 @@ Then open the project in the Godot editor once, so it imports the extension.
 ## Use
 
 ```ts
-import { openTsc } from 'godot-tsc';
+import { LspSession, openTsc } from 'godot-tsc';
 
 const tsc = openTsc(); // starts the service thread; throws, saying what to do, when the extension is not loaded
 
@@ -70,12 +68,15 @@ if (result.ok) {
   result.diagnostics; // syntax errors: UTF-16 start and end, line and character
 }
 
-// Check, hover and inlay hints: against a project (its tsconfig, and where its lib files are).
-const project = tsc.project({ config: '/project/tsconfig.json', libDir: '/lib' });
-const check = await project.check();
-if (check.kind === 'checked') check.report.diagnostics; // TypeScript's diagnostics: code, message, positions
-const hover = await project.hover('/project/main.ts', offset); // { start, end, name, type } or null
-const hints = await project.inlayHints('/project/main.ts', { from: 0, to: source.length });
+// Everything else: the language server, for the project whose tsconfig is `config`, with its lib files in `libDir`.
+const lsp = new LspSession(tsc, { config: '/project/tsconfig.json', libDir: '/lib' });
+await lsp.initialize();
+const position = { line: 4, character: 18 };                                // LSP's: from 0, in UTF-16 code units
+const { result: report } = await lsp.workspaceDiagnostics();                 // every source's diagnostics: code, message, range
+const completions = await lsp.completion('/project/main.ts', position);      // { items: [{ label, kind, detail, textEdit }] }
+const help = await lsp.signatureHelp('/project/main.ts', position);          // the call's signatures and the active parameter
+const [definition] = await lsp.definition('/project/main.ts', position);     // { uri: 'file:///project/a.ts', range }
+const edit = await lsp.rename('/project/main.ts', position, 'length');       // { changes: { [uri]: TextEdit[] } }
 
 tsc.close();
 ```
@@ -83,16 +84,14 @@ tsc.close();
 | Call | What it does |
 | --- | --- |
 | `openTsc()` | Opens the extension and starts its service thread. |
-| `tsc.setFile(path, text)`, `setFiles(files)`, `removeFile(path)` | The checker's in-memory files, at absolute paths. They return at once. There is no file system: the checker reads only what it is given. |
+| `tsc.setFile(path, text)`, `setFiles(files)`, `removeFile(path)` | The service's in-memory files, at absolute paths: the server's file system. They return at once. The checker reads only what it is given. |
 | `tsc.transpile(path, source, { reactRefresh? }, scope?)` | One file to JavaScript. `code` is a function body over `require`, `exports`, `module`, `$RefreshReg$` and `$RefreshSig$`; `imports` and `exports` list what it requires and exports. |
-| `tsc.project({ config, libDir })` | A project: the tsconfig at `config`, with its lib files in `libDir`. |
-| `project.check(scope?)` | Type-checks the project: `checked` with a report, `failed`, or `superseded` when a newer check was asked for before this one began. |
-| `project.hover(path, offset, scope?)` | The name and type at a UTF-16 offset. |
-| `project.inlayHints(path, { from, to }, parameterNames?, scope?)` | Inferred variable types and argument parameter names in a range. `parameterNames` is `'literals'` (the default), `'all'` or `'none'`. |
+| `new LspSession(tsc, { config, libDir }, { inlayParameterNames? })` | A language server session for the project whose tsconfig is `config`, with its lib files in `libDir`. |
+| `tsc.lsp(message, scope?)` | Any one LSP message, and the messages the server sends back. |
 | `tsc.close()` | Stops the service. Every outstanding request fails with `RequestCancelled`. |
 
 - **Nothing blocks.** Every call but the file calls returns a promise that settles on a later frame. `Tsc` polls the extension on a 1 ms
-  timer, and only while a request is outstanding. `transpileTimed` also returns the time the service thread took.
+  timer, and only while a request is outstanding. `transpileTimed` and `requestTimed` also return the time the service thread took.
 - **Requests can be taken back.** Pass a `RequestScope` and cancel it (an edit that overtakes the last one, an editor that closes): its
   unanswered requests are withdrawn and fail with `RequestCancelled`, so an answer you gave up on is never delivered.
 - **A request that is never answered fails.** After 30 s (`REQUEST_DEADLINE_MS`) a request fails, saying what the service's queue looked like.
@@ -101,35 +100,24 @@ tsc.close();
 
 ### Language server
 
-The service is also a Language Server Protocol server over the same in-memory files. `LspSession` speaks it with typed calls:
+`LspSession` names the project in `initialize` (`initializationOptions: { config, libDir, inlayParameterNames }`) and gives each request an
+id and a typed result; a refusal fails with `LspError`. `tsc.lsp(message)` relays any one JSON-RPC message instead, so a host can connect
+an editor of its own (over a socket, say).
 
-```ts
-import { LspSession, openTsc } from 'godot-tsc';
-
-const tsc = openTsc();
-tsc.setFiles([...projectFiles, ...libFiles]);
-const lsp = new LspSession(tsc, { config: '/project/tsconfig.json', libDir: '/lib' });
-await lsp.initialize();
-
-const position = { line: 4, character: 18 }; // LSP's: from 0, in UTF-16 code units
-const [definition] = await lsp.definition('/project/main.ts', position);    // { uri: 'file:///project/a.ts', range }
-const references = await lsp.references('/project/main.ts', position);      // every name that refers to it, in every file
-const edit = await lsp.rename('/project/main.ts', position, 'length');      // { changes: { [uri]: TextEdit[] } }
-```
-
-| Request | |
-| --- | --- |
-| `textDocument/definition`, `typeDefinition` | The declarations' names. An import goes to what it imports. |
-| `textDocument/references`, `documentHighlight` | Every name that refers to the same symbol, in the project or in the file, in text order. A highlight is `3` (declares) or `2` (reads). |
-| `textDocument/prepareRename`, `rename` | The edits for every reference. A shorthand is written out (`{ x }` becomes `{ x: renamed }` or `{ renamed: x }`); a name an import gives another name keeps it (`import { a as b }` renames `a` only). A symbol of the lib files cannot be renamed. |
-| `textDocument/hover` | The name and its type, as markdown. |
-| `initialize`, `shutdown`, `exit`, `textDocument/didOpen`, `didChange` (full or incremental), `didClose` | The session and the documents. A document is a `file://` URI of a path of the service's files; opening or changing it sets that file's text. |
+| Request | `LspSession` | |
+| --- | --- | --- |
+| `textDocument/diagnostic`, `workspace/diagnostic` | `diagnostics(path)`, `workspaceDiagnostics()` | A check of the project: one file's diagnostics, or every source's (the clean ones listed empty). A request that a newer one for the same document replaced before it began fails with `SERVER_CANCELLED`, so typing does not queue checks. |
+| `textDocument/completion` | `completion(path, position)` | After `expression.`, the properties of its type, with their types; elsewhere what is in scope: the project's names, then the lib files', then keywords (types only where a type is written). Nothing in a comment or a string. Each item replaces the name being typed. |
+| `textDocument/signatureHelp` | `signatureHelp(path, position)` | The signatures of the call the position is in the arguments of, the one the arguments resolve to active, and the parameter it is at (a rest parameter takes the rest). |
+| `textDocument/hover` | `hover(path, position)` | The name and its type, as markdown. |
+| `textDocument/inlayHint` | `inlayHints(path, range)` | The inferred types of declarations that write none, and the parameter names of arguments (`inlayParameterNames`: `'literals'` by default, `'all'` or `'none'`). |
+| `textDocument/definition`, `typeDefinition` | `definition`, `typeDefinition` | The declarations' names. An import goes to what it imports. |
+| `textDocument/references`, `documentHighlight` | `references`, `documentHighlight` | Every name that refers to the same symbol, in the project or in the file, in text order. A highlight is `3` (declares) or `2` (reads). |
+| `textDocument/prepareRename`, `rename` | `prepareRename`, `rename` | The edits for every reference. A shorthand is written out (`{ x }` becomes `{ x: renamed }` or `{ renamed: x }`); a name an import gives another name keeps it (`import { a as b }` renames `a` only). A symbol of the lib files cannot be renamed. |
+| `initialize`, `shutdown`, `exit`, `textDocument/didOpen`, `didChange`, `didClose` | `initialize`, `close`, `open`, `change` | The session and the documents. A document is a `file://` URI of a path of the service's files; opening or changing it (in full or by ranges) sets that file's text. |
 
 References follow what TypeScript's do: through imports and exports, to an interface's property from the object literals typed by it
 and from destructurings, and across class members, private names, enum members and namespace members.
-
-`tsc.lsp(message)` takes any one JSON-RPC message and resolves with the messages the server sends back, so a host can relay LSP from
-an editor of its own (over a socket, say). `initialize` takes the project as `initializationOptions: { config, libDir }`.
 
 ### Lib files
 
@@ -169,15 +157,16 @@ Typings generated with the extension loaded declare `GodotTsc` as well, and the 
 out of the project, as `scripts/demo.mjs` does.
 
 The extension's own API is the `GodotTsc` class (`ext/lib.rs`): `start`, `stop`, `setFile`, `setFiles`, `removeFile`, `requestPing`,
-`requestCompile` (the transpile), `requestCheck`, `requestQuery` (hover and inlay hints), `requestStall` (a test hook that holds the
-service thread), `cancel`, `poll` (one reply as JSON, or an empty string) and `state`. Requests and replies are JSON (`core/protocol.rs`,
+`requestCompile` (the transpile), `requestQuery` (an LSP message), `requestStall` (a test hook that holds the service thread), `cancel`,
+`poll` (one reply as JSON, or an empty string) and `state`. Requests and replies are JSON (`core/protocol.rs`,
 validated by `src/protocol.ts`).
 
 ## Demo
 
 `demo/` is a Godot project that uses the package the way yours would: a TypeScript editor whose problems, transpiled JavaScript, the
-module's exports (it runs the transpiled code), inlay hints, the type under the caret, its references, go to definition (a button, or
-Ctrl+click) and rename all come from godot-tsc.
+module's exports (it runs the transpiled code), inlay hints, the type under the caret, the signature of the call the caret is in, its
+references, completion (typing `.`, or Ctrl+Space), go to definition (a button, or Ctrl+click) and rename all come from godot-tsc, the
+checking, hover and the rest through `LspSession`.
 
 ```bash
 pnpm install && pnpm vendor && pnpm build:native   # build the extension (see "Build from source")
@@ -240,7 +229,7 @@ binaries, packs the package and attaches it to a GitHub release.
 | `pnpm test` | The host's request flow (ids, polling, cancelling, the deadline, superseded checks, projects, LSP sessions) against a stand-in link; the transpiler and the language server through `godot-tsc-cli`; the installer; and the built package as a consumer resolves it, under Node and TypeScript's module resolutions. |
 | `pnpm test:rust` | The extension's request queue, and the checker's symbol and position helpers. |
 | `pnpm test:types` | The package's TypeScript. |
-| `pnpm demo:verify` | The extension in Godot: transpile, run, check (an error found, then fixed), hover, inlay hints, references, go to definition, rename and a typed syntax error, through the demo's UI. |
+| `pnpm demo:verify` | The extension in Godot: transpile, run, diagnostics (an error found, then fixed), hover, inlay hints, references, go to definition, rename, completion, signature help and a typed syntax error, through the demo's UI. |
 | `pnpm vendor --verify` | `vendor/bun` is Bun's code at the pinned revision plus the reviewed patches. |
 | `pnpm notices --check` | `THIRD_PARTY_NOTICES.md` matches the dependencies. |
 
@@ -252,10 +241,10 @@ with GodotJS, so it is run locally.
 ```
 core/      godot_tsc_core: the service (requests in, JSON out). check.rs (bun_sema), transpile.rs (Bun's parser and printer),
            lower.rs (ES module to a CommonJS-shaped function body with live bindings), services.rs (hover, inlay hints),
-           navigate.rs (definitions, references, rename), lsp.rs (the language server); main.rs is godot-tsc-cli (requests framed
-           on stdin and stdout)
+           navigate.rs (definitions, references, rename), complete.rs (completion, signature help), lsp.rs (the language server);
+           main.rs is godot-tsc-cli (requests framed on stdin and stdout)
 ext/       godot_tsc_ext: the GDExtension, class GodotTsc: one service thread, a request queue and a reply list
-src/       the TypeScript API: tsc.ts (Tsc, TscProject), lsp.ts (LspSession), godot.ts (openTsc), host.ts (godot-tsc/host), protocol.ts,
+src/       the TypeScript API: tsc.ts (Tsc), lsp.ts (LspSession), godot.ts (openTsc), host.ts (godot-tsc/host), protocol.ts,
            scope.ts
 node/      godot-tsc/lib-bundle
 bin/       the installer (godot-tsc setup, and the postinstall)
@@ -272,8 +261,8 @@ tests/     the TypeScript tests
 
 ## Limits
 
-- No completions or signature help yet. Hover gives the name and the type, not documentation.
-- The language server does not push diagnostics (`publishDiagnostics`); `check()` gives them.
+- Hover and completion give names and types, not documentation; completion offers no snippets, auto-imports or module specifiers.
+- Diagnostics are pulled (`textDocument/diagnostic`, `workspace/diagnostic`), not pushed (`publishDiagnostics`).
 - Definitions in the lib files are not returned: the checker keeps no text of them, so they have no position. Their symbols cannot be renamed.
 - Inlay hints cover parameter names and the inferred types of variable declarations.
 - On the Web a panic stops the service thread; outstanding requests then fail after the 30 s deadline.
