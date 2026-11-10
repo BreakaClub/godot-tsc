@@ -236,7 +236,8 @@ pnpm pack
 ```
 
 Pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/release.yml`, which builds the macOS and stock Web
-binaries, packs the package and attaches it to a GitHub release. Run by hand, the same workflow is a dry run: it makes everything a release
+binaries, packs the package, attaches it to a GitHub release and publishes that tarball to npm. Publishing uses npm's trusted publishing:
+the package's settings on npmjs.com trust this repository's `release.yml` in its `npm` environment, so no npm token is stored. Run by hand, the same workflow is a dry run: it makes everything a release
 would publish, uploads it as the run's `godot-tsc-release` artifact and runs `pnpm publish --dry-run` on the tarball, and publishes nothing.
 
 ```bash
