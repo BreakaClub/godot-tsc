@@ -11,7 +11,7 @@
 // raster once the sample is checked and quits.
 //
 // The demo needs Godot 4.7 or newer with GodotJS (https://github.com/godotjs/GodotJS) on V8: `GODOT` names the binary, or `godot` on PATH is
-// used. It was verified with stock Godot 4.7.2 and upstream GodotJS, and with Breaka's Godot 4.8.
+// used. It was verified with stock Godot 4.7.2 and upstream GodotJS.
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

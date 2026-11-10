@@ -1,6 +1,6 @@
 // Stages the addon the package ships (addon/godot-tsc/) from the binaries in out/bin, and writes its manifest from what is there:
 //
-//   node scripts/stage-addon.mjs [--web-profile=stock|breaka] [--require-binaries] [--require-all-platforms]
+//   node scripts/stage-addon.mjs [--web-profile=stock] [--require-binaries] [--require-all-platforms]
 //
 //   addon/godot-tsc/godot_tsc.gdextension   lists each staged native library, and the Web side module of one profile (default stock)
 //   addon/godot-tsc/bin/                    the binaries
@@ -12,7 +12,7 @@
 // build.json also records what each binary is bound to: the Godot API dumps' SHA-256 (natively, and per Web profile) and the Bun revision.
 //
 // A Web manifest names one side module for `web.*.threads.wasm32`, so it can serve one profile's templates: a module linked for another engine's
-// Emscripten kills the page at load (scripts/godot-api.mjs). Both profiles' modules may be staged; the manifest names the one `--web-profile` picks.
+// Emscripten kills the page at load (scripts/godot-api.mjs). The manifest names the module of the profile `--web-profile` picks.
 // `--require-binaries` (prepack) refuses to stage an addon without a native library, so a pack never ships an empty addon.
 // `--require-all-platforms` (a release) refuses to stage one that lacks any platform's library, an architecture of the macOS one, or the Web module.
 import { spawnSync } from 'node:child_process';

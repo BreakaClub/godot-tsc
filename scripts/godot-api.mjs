@@ -2,12 +2,11 @@
 //
 // Native: one build per platform and architecture (NATIVE_TARGETS), bound to stock Godot 4.7.2's dumps (api/godot-4.7.2). A GDExtension loads in
 // the Godot it was bound to or a newer one, and godot-rust's `lazy-function-tables` resolves each method on first use, so the one build also loads
-// in Breaka's Godot 4.8.
+// in newer engines.
 //
 // Web: a side module must be linked with the Emscripten of the engine whose templates load it, and one linked for another engine's templates kills
 // the page at load. So the Web build is per profile, each with its own file name:
 //   stock   stock Godot 4.7 Web templates (Emscripten 4.0.11), bound to the 4.7.2 dumps. This is the module the shipped manifest names.
-//   breaka  Breaka's Godot 4.8 Web templates (Emscripten 6.0.12 with Breaka's lazy function-table ABI), bound to Breaka's 4.8 dumps (api/breaka-4.8).
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
@@ -25,14 +24,6 @@ export const WEB_PROFILES = Object.freeze({
     library: 'godot_tsc.web.stock.wasm',
     extensionApi: NATIVE_API.extensionApi,
     gdextensionInterface: NATIVE_API.gdextensionInterface,
-    lazyFunctionTable: false,
-  }),
-  breaka: Object.freeze({
-    name: 'breaka',
-    library: 'godot_tsc.web.breaka.wasm',
-    extensionApi: resolve(root, 'api/breaka-4.8/extension_api.json'),
-    gdextensionInterface: resolve(root, 'api/breaka-4.8/gdextension_interface.json'),
-    lazyFunctionTable: true,
   }),
 });
 

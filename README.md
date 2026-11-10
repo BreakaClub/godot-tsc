@@ -187,8 +187,7 @@ GODOT=/path/to/godot pnpm demo:verify               # the same, headless: the de
 
 `GODOT` is a Godot 4.7.2 or newer with GodotJS (or `godot` on `PATH`). `scripts/demo.mjs` installs the addon with `godot-tsc setup`,
 writes the lib files, generates GodotJS's typings for that engine, type-checks and bundles `demo/src`, and runs the demo.
-`--capture=<png>` opens a window, saves a screenshot and quits. The demo has been verified with stock Godot 4.7.2 and upstream GodotJS,
-and with Breaka's Godot 4.8.
+`--capture=<png>` opens a window, saves a screenshot and quits. The demo has been verified with stock Godot 4.7.2 and upstream GodotJS.
 
 ## Platforms
 
@@ -214,9 +213,8 @@ runs are unaffected.
 GodotJS's native V8 has no WebAssembly, which is why the checker runs as a GDExtension rather than as a wasm module in JavaScript.
 
 On the Web, a side module must be linked with the same Emscripten as the export templates that load it; one linked for other templates
-stops the page at load. The `breaka` Web profile (`pnpm build:web --profile=breaka`, `pnpm stage:addon --web-profile=breaka`) is for
-Breaka's custom Godot 4.8 templates, which use Emscripten 6.0.12 and a lazy function-table ABI. Its requirements are in
-`scripts/build-web.mjs`; it is not needed for stock Godot.
+stops the page at load. The shipped module is for stock Godot 4.7 templates (Emscripten 4.0.11); an engine built with another
+Emscripten needs its own build of the module.
 
 `addons/godot-tsc/build.json` records the package version, the commit, each binary's SHA-256 and the Godot API it was built against, so
 a project can check what it installed.
@@ -285,7 +283,7 @@ bin/       the installer (godot-tsc setup, and the postinstall)
 scripts/   vendoring, builds, staging, notices and the demo runner
 patches/   the patches applied to Bun's files, each with its reason in scripts/vendor-bun.py
 stubs/     stand-ins for two of Bun's crates
-api/       the Godot API dumps the extension is built against (stock 4.7.2; Breaka's 4.8 for the breaka Web profile)
+api/       the Godot API dumps the extension is built against (stock 4.7.2)
 demo/      the demo project
 tests/     the TypeScript tests, and the project `verify:bindings` runs (tests/bindings/)
 ```
