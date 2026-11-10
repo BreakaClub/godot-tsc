@@ -12,6 +12,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# What the run is, in the list of runs: a release of a tag, or a dry run of the ref it was run on.
+run-name: ${{ github.event_name == 'push' && format('Release {0}', github.ref_name) || format('Release dry run ({0})', github.ref_name) }}
+
 jobs:
   build-native:
     name: Build native (macOS arm64)
@@ -79,7 +82,7 @@ jobs:
 
   release:
     needs: [build-native, build-web]
-    name: Pack & GitHub release
+    name: "${{ github.event_name == 'push' && 'Pack & GitHub release' || 'Pack (dry run, nothing published)' }}"
     # macOS, for `lipo`: the staged manifest lists the architectures the macOS library has (scripts/stage-addon.mjs).
     runs-on: macos-latest
     permissions:
