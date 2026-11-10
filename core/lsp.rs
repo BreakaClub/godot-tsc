@@ -260,16 +260,25 @@ impl Lsp {
             "textDocument/didClose" | "textDocument/didSave" => Ok(Value::Null),
             "textDocument/hover" => {
                 let (path, (line, character)) = at(params)?;
-                let text = host.text(path.as_bytes()).ok_or_else(|| refuse(INVALID_PARAMS, format!("{path} is not in the project")))?;
-                let offset = Positions::new(text).of(Positions::new(text).byte_at(line, character) as u32).0;
+                let text = host.text(path.as_bytes()).ok_or_else(|| refuse(INVALID_PARAMS, format!("{path} is not in the project")))?.to_vec();
+                let offset = Positions::new(&text).of(Positions::new(&text).byte_at(line, character) as u32).0;
                 let hover = crate::services::hover(host, runs, &project.config, &project.lib_dir, path.as_bytes(), offset);
                 let hover: Value = serde_json::from_str(&hover).map_err(|error| refuse(REQUEST_FAILED, error.to_string()))?;
                 match hover.get("hover") {
                     Some(found) if !found.is_null() => {
                         let name = found.get("name").and_then(Value::as_str).unwrap_or_default();
                         let ty = found.get("type").and_then(Value::as_str).unwrap_or_default();
+                        // The contents are one TypeScript code block: `name: type`, or the type alone where there is no name.
                         let shown = if name.is_empty() { ty.to_string() } else { format!("{name}: {ty}") };
-                        Ok(json!({ "contents": { "kind": "markdown", "value": format!("```typescript\n{shown}\n```") } }))
+                        let point = |key: &str| {
+                            let (line, character) = line_character(&text, found.get(key).and_then(Value::as_u64).unwrap_or(0) as usize);
+                            json!({ "line": line, "character": character })
+                        };
+                        Ok(json!({
+                            "contents": { "kind": "markdown", "value": format!("```typescript\n{shown}\n```") },
+                            // The name the hover is of, which an editor underlines and places its tooltip by.
+                            "range": { "start": point("start"), "end": point("end") },
+                        }))
                     }
                     _ => Ok(Value::Null),
                 }

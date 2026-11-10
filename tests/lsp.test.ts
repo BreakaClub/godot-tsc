@@ -236,9 +236,11 @@ test('hover answers in markdown, and an unknown method is refused', { skip: SKIP
     request('textDocument/hover', { textDocument: { uri: B_URI }, position: at(B, 'target:') }),
     request('textDocument/frobnicate', {}),
   ]);
-  const contents = result<{ contents: { kind: string; value: string } }>(hover ?? []).contents;
+  const { contents, range } = result<{ contents: { kind: string; value: string }; range: Range }>(hover ?? []);
   assert.equal(contents.kind, 'markdown');
-  assert.match(contents.value, /target: Point/u);
+  assert.equal(contents.value, '```typescript\ntarget: Point\n```');
+  // The range is the name's.
+  assert.deepEqual(range, { start: at(B, 'target:'), end: at(B, 'target:', 0, 'target'.length) });
   assert.equal(unknown?.[0]?.error?.code, -32601);
 });
 

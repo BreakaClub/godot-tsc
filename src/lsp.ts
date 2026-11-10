@@ -179,8 +179,11 @@ export class LspSession {
     return this.notify('textDocument/didChange', { textDocument: { uri: fileUri(path), version }, contentChanges: [{ text }] }, scope);
   }
 
-  /** The name and type at `position`, as markdown, or null. */
-  hover(path: string, position: LspPosition, scope?: RequestScope): Promise<{ readonly contents: { readonly kind: 'markdown'; readonly value: string } } | null> {
+  /**
+   * The name and type at `position`, or null. `contents.value` is one TypeScript code block, "```typescript\n<name>: <type>\n```", or the
+   * type alone where there is no name; `range` is the name's.
+   */
+  hover(path: string, position: LspPosition, scope?: RequestScope): Promise<{ readonly contents: { readonly kind: 'markdown'; readonly value: string }; readonly range: LspRange } | null> {
     return this.request('textDocument/hover', { textDocument: { uri: fileUri(path) }, position }, scope);
   }
 
