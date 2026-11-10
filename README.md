@@ -1,182 +1,246 @@
 # godot-tsc
 
-Bun's TypeScript checker and transpiler running inside Godot, as a GDExtension, with a typed API for
-[GodotJS](https://github.com/godotjs/GodotJS) code. Give it a project's files and it type-checks them, transpiles TSX/TS to a
-CommonJS-shaped function body you can evaluate in the running realm (optionally instrumented for React Fast Refresh), and
-answers hover and inlay-hint queries. All of it runs on a thread of its own: no call waits for it, natively or on the Web.
+TypeScript type checking and transpiling inside a running Godot game or editor.
 
-It was built for, and extracted from, the code editor in [godot-react-ui](https://github.com/BreakaClub/godot-react-ui)'s demo.
+godot-tsc is a GDExtension that runs [Bun](https://github.com/oven-sh/bun)'s TypeScript checker (`bun_sema`, a port of
+[typescript-go](https://github.com/microsoft/typescript-go)) and its JavaScript parser and printer on a thread of their own, with a typed,
+non-blocking API for [GodotJS](https://github.com/godotjs/GodotJS) code. Give it a project's files and it:
 
-**Versions** follow TypeScript's: the major and minor are those of the TypeScript the checker implements (Bun's `bun_sema` at the
-pinned revision, whose lib files are TypeScript 7.0.2's), and the patch is this package's own. 7.0.0 is the first.
+- **type-checks** them and reports TypeScript's diagnostics, with positions;
+- **transpiles** TS/TSX to a CommonJS-shaped function body you can run in the live JavaScript realm, optionally instrumented for React
+  Fast Refresh;
+- answers **hover** (the name and type at an offset) and **inlay hint** queries.
+
+Nothing waits for it: every request is answered on a later frame, natively and on the Web. It is for in-game code editors, live
+scripting and modding tools, and anything else that needs TypeScript's answers while the game runs.
+
+> **Status: 7.0.0, pre-release.** It is not on npm yet, and the only prebuilt binaries are for macOS (Apple silicon) and the Web; other
+> desktop platforms build from source (below) but are untested.
+
+## Requirements
+
+- Godot 4.7.2 or newer, with [GodotJS](https://github.com/godotjs/GodotJS) (tested on its V8 runtime).
+- GodotJS's camel-cased bindings, in `project.godot`:
+
+  ```ini
+  [GodotJS]
+  runtime/core/camel_case_bindings_enabled=true
+  ```
+
+- Node 18 or newer to install it (Node 24 for `godot-tsc/lib-bundle`, below).
 
 ## Install
 
 ```bash
-pnpm add godot-tsc
+npm install godot-tsc            # or pnpm add godot-tsc, or yarn add godot-tsc
 ```
 
-The package's `postinstall` copies the GDExtension into the nearest Godot project above where you installed it, at
-`res://addons/godot-tsc/` (and writes `node_modules/.gdignore` so the editor does not import npm's tree). pnpm 10 runs a
-dependency's install script only when the project allows it (`"pnpm": { "onlyBuiltDependencies": ["godot-tsc"] }` in
-`package.json`, or `pnpm approve-builds`). Either way, to install or update it by hand:
+Install it in your Godot project's directory (or below it). The package's `postinstall` copies the GDExtension into the nearest
+project above it, at `res://addons/godot-tsc/`, and writes `node_modules/.gdignore` so the editor does not import npm's files. pnpm 10
+and later run a dependency's install script only when the project allows it: add `"pnpm": { "onlyBuiltDependencies": ["godot-tsc"] }`
+to `package.json`, or run `pnpm approve-builds`. To install or update the addon by hand:
 
 ```bash
-pnpm exec godot-tsc setup [--project-dir <path>] [--force]
+npx godot-tsc setup [--project-dir <path>] [--force]
 ```
 
-Open the project in the editor once afterwards so Godot imports the extension.
+Then open the project in the Godot editor once, so it imports the extension.
 
 ## Use
 
 ```ts
-import { openTsc, RequestScope } from 'godot-tsc';
+import { openTsc } from 'godot-tsc';
 
 const tsc = openTsc(); // starts the service thread; throws, saying what to do, when the extension is not loaded
+
 tsc.setFiles([
-  { path: '/project/tsconfig.json', text: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', strict: true }, files: ['/project/app.tsx'] }) },
-  { path: '/project/app.tsx', text: source },
-  ...libFiles, // TypeScript's lib.*.d.ts under /lib (below)
+  { path: '/project/tsconfig.json', text: JSON.stringify({ compilerOptions: { strict: true, lib: ['es2022'] }, files: ['/project/main.ts'] }) },
+  { path: '/project/main.ts', text: source },
+  ...libFiles, // TypeScript's lib.*.d.ts, as { path: '/lib/lib.es2022.d.ts', text } (see "Lib files")
 ]);
 
-const result = await tsc.transpile('/project/app.tsx', source, { reactRefresh: true });
+// Transpile: syntax only, no type checking.
+const result = await tsc.transpile('/project/main.ts', source);
 if (result.ok) {
-  result.code;    // a function body over require, exports, module, $RefreshReg$ and $RefreshSig$
-  result.imports; // the specifiers it requires; result.exports, the names it exports
+  const module = { exports: {} };
+  new Function('require', 'exports', 'module', '$RefreshReg$', '$RefreshSig$', result.code)(require, module.exports, module, () => {}, () => () => {});
 } else {
-  result.diagnostics; // syntax errors with UTF-16 start/end, line and character
+  result.diagnostics; // syntax errors: UTF-16 start and end, line and character
 }
 
+// Check, hover and inlay hints: against a project (its tsconfig, and where its lib files are).
 const project = tsc.project({ config: '/project/tsconfig.json', libDir: '/lib' });
-const check = await project.check();                            // { kind: 'checked', report: { diagnostics } } | { kind: 'superseded' } | { kind: 'failed' }
-const hover = await project.hover('/project/app.tsx', offset);  // { start, end, name, type } | null
-const hints = await project.inlayHints('/project/app.tsx', { from: 0, to: source.length }, 'literals');
+const check = await project.check();
+if (check.kind === 'checked') check.report.diagnostics; // TypeScript's diagnostics: code, message, positions
+const hover = await project.hover('/project/main.ts', offset); // { start, end, name, type } or null
+const hints = await project.inlayHints('/project/main.ts', { from: 0, to: source.length });
+
 tsc.close();
 ```
 
 | Call | What it does |
 | --- | --- |
-| `openTsc()` | The `Tsc` over the extension, its service thread started. |
-| `tsc.setFile(path, text)`, `setFiles(files)`, `removeFile(path)` | The checker's in-memory files: absolute paths (`/project/app.tsx`). Return at once. |
-| `tsc.transpile(path, source, { reactRefresh? }, scope?)` | One file to JavaScript with Bun's parser and printer. Syntax only: it type-checks nothing. |
-| `tsc.project({ config, libDir })` | A `TscProject`: the project whose tsconfig is `config`, with its lib files in `libDir`. |
-| `project.check(scope?)` | Type-checks the project. A check not begun when the next is asked for is answered as `superseded`. |
-| `project.hover(path, offset, scope?)` | The name and type under a UTF-16 offset. |
-| `project.inlayHints(path, { from, to }, parameterNames?, scope?)` | Inferred declaration types and argument parameter names in a range (`'literals'` by default, or `'all'`, `'none'`). |
-| `tsc.close()` | Stops the service; every outstanding request fails with `RequestCancelled`. |
+| `openTsc()` | Opens the extension and starts its service thread. |
+| `tsc.setFile(path, text)`, `setFiles(files)`, `removeFile(path)` | The checker's in-memory files, at absolute paths. They return at once. There is no file system: the checker reads only what it is given. |
+| `tsc.transpile(path, source, { reactRefresh? }, scope?)` | One file to JavaScript. `code` is a function body over `require`, `exports`, `module`, `$RefreshReg$` and `$RefreshSig$`; `imports` and `exports` list what it requires and exports. |
+| `tsc.project({ config, libDir })` | A project: the tsconfig at `config`, with its lib files in `libDir`. |
+| `project.check(scope?)` | Type-checks the project: `checked` with a report, `failed`, or `superseded` when a newer check was asked for before this one began. |
+| `project.hover(path, offset, scope?)` | The name and type at a UTF-16 offset. |
+| `project.inlayHints(path, { from, to }, parameterNames?, scope?)` | Inferred variable types and argument parameter names in a range. `parameterNames` is `'literals'` (the default), `'all'` or `'none'`. |
+| `tsc.close()` | Stops the service. Every outstanding request fails with `RequestCancelled`. |
 
-- **Nothing blocks.** Every call but the file calls returns a promise settled on a later frame; `Tsc` polls the extension (a 1 ms
-  timer) only while a request is outstanding. `transpileTimed` also gives the time the service thread took.
-- **Requests can be taken back.** Pass a `RequestScope` and cancel it: its unanswered requests are withdrawn and fail with
-  `RequestCancelled`, so an answer that was given up is never delivered.
-- **The lib files are yours to supply.** `libDir` is a directory of the in-memory files holding TypeScript's `lib.*.d.ts`; a check
-  of a program without them fails. The `typescript` package's `lib/` files work (5.9.3's were checked: `lib.es2022.d.ts`, the
-  decorators and what they reference, 57 files). Bun's own bundle of TypeScript 7.0.2's ships with the package as
-  `godot-tsc/typescript_libs.bin` (`require.resolve('godot-tsc/typescript_libs.bin')`; zstd with dictionaries, which `node:zlib`
-  reads from Node 24; godot-react-ui's demo reads it). Packages resolve through `paths`; there is no `node_modules` lookup.
-- **Node.** `godot-tsc` imports the engine's `godot` module, so it loads only in GodotJS. `godot-tsc/host` is everything but `openTsc`, with no
-  `godot` import: code that drives a `Tsc` (given any `TscLink`), cancels with `RequestScope` or parses replies can be loaded and tested under Node.
-  The two entries share one module, so a `RequestCancelled` from either is the same class. Its types resolve under every `moduleResolution`,
-  `node` (node10) included, through `typesVersions`.
-- **Typings.** `godot-tsc` declares the `GodotTsc` class into the `godot` module, so it needs a GodotJS project's own typings for
-  `godot`. `Tsc` takes any `TscLink`, which is how `tests/tsc.test.ts` drives it without Godot, and `TscHost` is the interface
-  a stand-in implements.
+- **Nothing blocks.** Every call but the file calls returns a promise that settles on a later frame. `Tsc` polls the extension on a 1 ms
+  timer, and only while a request is outstanding. `transpileTimed` also returns the time the service thread took.
+- **Requests can be taken back.** Pass a `RequestScope` and cancel it (an edit that overtakes the last one, an editor that closes): its
+  unanswered requests are withdrawn and fail with `RequestCancelled`, so an answer you gave up on is never delivered.
+- **A request that is never answered fails.** After 30 s (`REQUEST_DEADLINE_MS`) a request fails, saying what the service's queue looked like.
+- **Modules.** The transpiled form is a function body, so `import.meta` and top-level `await` are reported as errors, and a dynamic
+  `import()` is left as it is. Imports between your files resolve through the tsconfig's `paths`; there is no `node_modules` lookup.
 
-The extension's own API is the `GodotTsc` class (`ext/lib.rs`): `start`, `stop`, `setFile`, `setFiles`, `removeFile`,
-`requestPing`, `requestCompile` (the transpile), `requestCheck`, `requestQuery` (hover and inlay hints as JSON), `requestStall`
-(a test hook that holds the service thread), `cancel`, `poll` (one reply as JSON, or an empty string) and `state`. Requests and
-replies are JSON (`core/protocol.rs`; validated on the TypeScript side by `src/protocol.ts`).
+### Lib files
+
+A check needs TypeScript's `lib.*.d.ts` files among the in-memory files, under `libDir`; without them it fails. The package ships Bun's
+bundle of TypeScript 7.0.2's lib files as `godot-tsc/typescript_libs.bin`, and `godot-tsc/lib-bundle` reads it under Node 24, so a build
+step can write the ones your project needs to a file your game loads:
+
+```js
+// build-libs.mjs (Node 24): writes res://tsc/libs.json
+import { writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { ES2022_LIB_ROOTS, libClosure, readLibBundle } from 'godot-tsc/lib-bundle';
+
+const all = readLibBundle(createRequire(import.meta.url).resolve('godot-tsc/typescript_libs.bin'));
+const libs = libClosure(all, ES2022_LIB_ROOTS); // lib.es2022.d.ts, the decorators, and everything they reference: 57 files
+writeFileSync('tsc/libs.json', JSON.stringify([...libs].map(([name, text]) => ({ path: `/lib/${name}`, text }))));
+```
+
+```ts
+// In the game
+const libFiles = JSON.parse(FileAccess.getFileAsString('res://tsc/libs.json'));
+```
+
+The `typescript` package's `lib/` files work as well (5.9.3's were checked).
+
+### Under Node
+
+`godot-tsc` imports the engine's `godot` module, so it loads only under GodotJS. `godot-tsc/host` is everything except `openTsc`, with
+no `godot` import, so code that drives a `Tsc`, cancels with `RequestScope` or parses replies can be loaded and tested under Node. A
+`Tsc` takes any `TscLink`, which is how this package's own tests drive it without Godot. The two entries share one module, so a
+`RequestCancelled` from either is the same class. Both entries' types resolve under every `moduleResolution`.
+
+### Typings
+
+`godot-tsc` declares the extension's `GodotTsc` class in the `godot` module, so it needs your project's GodotJS typings for `godot`.
+Typings generated with the extension loaded declare `GodotTsc` as well, and the two declarations conflict: generate them with the addon
+out of the project, as `scripts/demo.mjs` does.
+
+The extension's own API is the `GodotTsc` class (`ext/lib.rs`): `start`, `stop`, `setFile`, `setFiles`, `removeFile`, `requestPing`,
+`requestCompile` (the transpile), `requestCheck`, `requestQuery` (hover and inlay hints), `requestStall` (a test hook that holds the
+service thread), `cancel`, `poll` (one reply as JSON, or an empty string) and `state`. Requests and replies are JSON (`core/protocol.rs`,
+validated by `src/protocol.ts`).
 
 ## Demo
 
-`demo/` is a Godot project that uses the package the way a project does: a TypeScript editor whose problems, transpiled JavaScript,
-exports (the transpiled module run in the realm), inlay hints and the type under the caret all come from godot-tsc.
+`demo/` is a Godot project that uses the package the way yours would: a TypeScript editor whose problems, transpiled JavaScript, the
+module's exports (it runs the transpiled code), inlay hints and the type under the caret all come from godot-tsc.
 
 ```bash
-pnpm build:native                 # the extension (and pnpm vendor first, once)
-pnpm demo                         # stages the addon, installs it with `godot-tsc setup`, builds demo/src and opens the demo
-pnpm demo:verify                  # the same, headless: the demo edits, types and moves the caret itself and checks every answer
+pnpm install && pnpm vendor && pnpm build:native   # build the extension (see "Build from source")
+GODOT=/path/to/godot pnpm demo                      # build the demo and open it
+GODOT=/path/to/godot pnpm demo:verify               # the same, headless: the demo drives itself and checks every answer
 ```
 
-`scripts/demo.mjs` writes what the demo needs and does not commit: the installed addon, the lib files (`demo/tsc/libs.json`, from
-`typescript_libs.bin`) and GodotJS's typings for the engine. It needs a Godot with GodotJS (V8) and camel-cased bindings: `GODOT` names the
-binary, Breaka's Godot 4.8 by default. `--capture=<png>` opens it in a window, saves what it shows and quits.
+`GODOT` is a Godot 4.7.2 or newer with GodotJS (or `godot` on `PATH`). `scripts/demo.mjs` installs the addon with `godot-tsc setup`,
+writes the lib files, generates GodotJS's typings for that engine, type-checks and bundles `demo/src`, and runs the demo.
+`--capture=<png>` opens a window, saves a screenshot and quits. The demo has been verified with stock Godot 4.7.2 and upstream GodotJS,
+and with Breaka's Godot 4.8.
+
+## Platforms
+
+| Platform | File | Status |
+| --- | --- | --- |
+| macOS (Apple silicon) | `libgodot_tsc.dylib` | Prebuilt. Built against the Godot 4.7.2 API, so it loads in 4.7.2 and newer. |
+| Web (stock Godot 4.7 templates) | `godot_tsc.web.stock.wasm` | Prebuilt. An Emscripten 4.0.11 side module for threaded Web exports. |
+| Linux, Windows, macOS (Intel) | `libgodot_tsc.so`, `godot_tsc.dll` | Build from source (`pnpm build:native --target=<triple>`); untested. |
+
+GodotJS's native V8 has no WebAssembly, which is why the checker runs as a GDExtension rather than as a wasm module in JavaScript.
+
+On the Web, a side module must be linked with the same Emscripten as the export templates that load it; one linked for other templates
+stops the page at load. The `breaka` Web profile (`pnpm build:web --profile=breaka`, `pnpm stage:addon --web-profile=breaka`) is for
+Breaka's custom Godot 4.8 templates, which use Emscripten 6.0.12 and a lazy function-table ABI. Its requirements are in
+`scripts/build-web.mjs`; it is not needed for stock Godot.
+
+`addons/godot-tsc/build.json` records the package version, the commit, each binary's SHA-256 and the Godot API it was built against, so
+a project can check what it installed.
+
+## Versions
+
+The major and minor follow the TypeScript the checker implements (its lib files are TypeScript 7.0.2's); the patch is this package's
+own. 7.0.0 is the first release.
+
+## Build from source
+
+You need rustup (the nightly in `rust-toolchain.toml` installs itself), Node 24 (`.node-version`; avoid 24.7.0, which can crash at
+exit), pnpm, Python 3 and git. The Web build also needs the `wasm32-unknown-emscripten` target and `rust-src` for that nightly, and an
+Emscripten SDK in `EMSDK`.
+
+```bash
+pnpm install
+pnpm vendor                       # extracts Bun's crates into vendor/bun (fetches Bun at the pinned revision; --bun=<checkout> uses a local one)
+pnpm build:native --cli           # out/bin/libgodot_tsc.dylib, and target/release/godot-tsc-cli for the tests
+pnpm test:rust && pnpm test
+EMSDK=<emsdk 4.0.11> pnpm build:web --profile=stock
+pnpm build                        # dist/: CommonJS, ES modules and declarations
+pnpm stage:addon                  # addon/godot-tsc/ from out/bin, with its manifest, build.json and the licenses
+pnpm pack
+```
+
+Pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/release.yml`, which builds the macOS and stock Web
+binaries, packs the package and attaches it to a GitHub release.
 
 ## Tests
 
 | Command | What it covers |
 | --- | --- |
-| `pnpm test` | `tests/tsc.test.ts`: the host's request flow (ids, polling, cancelling, the deadline, superseded checks, projects) against a stand-in link. `tests/transpile.test.ts`: the transpiler through `godot-tsc-cli`. `tests/cli.test.ts`: the installer. `tests/package.test.ts`: the built package as a consumer resolves it (`godot-tsc/host` under Node). |
+| `pnpm test` | The host's request flow (ids, polling, cancelling, the deadline, superseded checks, projects) against a stand-in link; the transpiler through `godot-tsc-cli`; the installer; and the built package as a consumer resolves it, under Node and TypeScript's module resolutions. |
 | `pnpm test:rust` | The extension's request queue, and the checker's symbol and position helpers. |
 | `pnpm test:types` | The package's TypeScript. |
 | `pnpm demo:verify` | The extension in Godot: transpile, run, check (an error found, then fixed), hover, inlay hints and a typed syntax error, through the demo's UI. |
-| `pnpm vendor --verify` | The vendored Bun crates are Bun's at the pinned revision, plus the reviewed patches. |
+| `pnpm vendor --verify` | `vendor/bun` is Bun's code at the pinned revision plus the reviewed patches. |
+| `pnpm notices --check` | `THIRD_PARTY_NOTICES.md` matches the dependencies. |
 
-CI (`.github/workflows/ci.yml`) runs `test:types`, `test` and `test:rust`, vendoring Bun fresh; not the demo, which needs a Godot with GodotJS.
+CI runs `test:types`, `test`, `test:rust` and `notices --check`, with Bun vendored fresh at the pinned revision. The demo needs a Godot
+with GodotJS, so it is run locally.
 
-## Platforms
-
-| Platform | File | Notes |
-| --- | --- | --- |
-| macOS arm64 | `libgodot_tsc.dylib` | Bound to the Godot 4.7.2 API (`api/godot-4.7.2`), so it loads in 4.7.2 and newer, including Breaka's 4.8. |
-| Web, stock Godot 4.7 templates | `godot_tsc.web.stock.wasm` | Emscripten 4.0.11 side module. The shipped manifest names this one. |
-| Web, Breaka's Godot 4.8 templates | `godot_tsc.web.breaka.wasm` | Emscripten 6.0.12 with Breaka's lazy function-table ABI. Shipped when built locally (below); CI does not build it. |
-
-A Web side module must be linked with the Emscripten of the engine whose templates load it; one linked for the other engine
-kills the page at load. A manifest can name one module for `web.*.threads.wasm32`, so `stage-addon.mjs --web-profile=breaka`
-stages an addon for Breaka's templates instead. `addon/godot-tsc/build.json` records each binary's SHA-256 and the Godot API dumps
-it is bound to (natively and per Web module), so a project can check what it installed. Linux and Windows are not built yet. GodotJS's native V8 has no
-WebAssembly, which is why the native side is a GDExtension and not a wasm checker.
-
-## Build from source
-
-Prerequisites: rustup (the nightly in `rust-toolchain.toml` installs itself), Node 24 (`.node-version`: 24.15.0; 24.7.0 can crash at exit), pnpm, Python 3 and git. The Web build
-also needs `wasm32-unknown-emscripten` and `rust-src` for that nightly, and an Emscripten SDK in `EMSDK`.
-
-```bash
-pnpm install
-pnpm vendor                       # Bun's crates into vendor/bun (fetches Bun at the pinned revision; --bun=<checkout> reads a local one)
-pnpm build:native --cli           # out/bin/libgodot_tsc.dylib, and target/release/godot-tsc-cli for the tests
-pnpm test:rust && pnpm test       # Rust tests; TypeScript tests, including the transpiler through godot-tsc-cli
-EMSDK=<emsdk 4.0.11> pnpm build:web --profile=stock
-pnpm build                        # dist/: CommonJS, ES modules and declarations
-pnpm stage:addon                  # addon/godot-tsc/ from out/bin, with its manifest and build.json
-pnpm pack
-```
-
-The Breaka profile's Web build takes `EMSDK` (Breaka's Emscripten 6.0.12), `BINARYEN_ROOT`, `BINARYEN_MANIFEST_SHA256` and
-`GODOT_EMSCRIPTEN_HELPER` (Breaka's `platform/web/emscripten_helpers.py`); `scripts/build-web.mjs` describes each one.
-
-Releases: pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/release.yml`, which builds macOS arm64
-and the stock Web module, stages the addon, packs the tarball and attaches both to a GitHub release. Publishing to npm is not
-switched on yet.
-
-## What is inside
+## Layout
 
 ```
-core/      godot_tsc_core: Service::handle(request) -> JSON response. check.rs (bun_sema), transpile.rs (Bun's parser and
-           printer), lower.rs (ES module -> CommonJS-shaped function body with live bindings), services.rs (hover, inlay hints);
-           main.rs is godot-tsc-cli (frames on stdin/stdout), wasm.rs a wasm32-unknown-unknown export
-ext/       godot_tsc_ext: the GDExtension, class GodotTsc; one service thread, a queue and a reply list
-scripts/   vendor-bun.py extracts 35 of Bun's crates at the pinned revision into vendor/ (generated, ignored; --verify checks it);
-           the build, vendor and stage scripts
-patches/   seven reviewed patches to Bun's files, each with its reason in vendor-bun.py's SOURCE_ADAPTATIONS
-stubs/     stand-ins for bun_crash_handler and bun_io
-api/       the Godot API dumps the extension is bound to (stock 4.7.2; Breaka's 4.8 for its Web profile)
-src/       the TypeScript API: tsc.ts (Tsc, TscProject), godot.ts (openTsc), protocol.ts, scope.ts (dist/ when built)
-demo/      a Godot project that uses the package (scripts/demo.mjs builds, runs and verifies it)
+core/      godot_tsc_core: the service (requests in, JSON out). check.rs (bun_sema), transpile.rs (Bun's parser and printer),
+           lower.rs (ES module to a CommonJS-shaped function body with live bindings), services.rs (hover, inlay hints);
+           main.rs is godot-tsc-cli (requests framed on stdin and stdout)
+ext/       godot_tsc_ext: the GDExtension, class GodotTsc: one service thread, a request queue and a reply list
+src/       the TypeScript API: tsc.ts (Tsc, TscProject), godot.ts (openTsc), host.ts (godot-tsc/host), protocol.ts, scope.ts
+node/      godot-tsc/lib-bundle
+bin/       the installer (godot-tsc setup, and the postinstall)
+scripts/   vendoring, builds, staging, notices and the demo runner
+patches/   the patches applied to Bun's files, each with its reason in scripts/vendor-bun.py
+stubs/     stand-ins for two of Bun's crates
+api/       the Godot API dumps the extension is built against (stock 4.7.2; Breaka's 4.8 for the breaka Web profile)
+demo/      the demo project
 tests/     the TypeScript tests
 ```
 
-Everything in `vendor/bun` that is not patched or stubbed is Bun's, byte for byte (`vendor/bun/provenance.json`).
+`vendor/bun` is generated by `pnpm vendor` and not committed. Everything in it that is not patched or stubbed is Bun's, byte for byte
+(`vendor/bun/provenance.json` records each file's hash).
 
 ## Limits
 
-- Completions are not built. Hover is the name and the type (no documentation), printed with qualified names; inlay hints are
-  parameter names and the inferred types of variable declarations.
-- The transpiled form is a function body: `import.meta` and top-level `await` are diagnostics, and a dynamic `import()` is left as it is.
-- On the Web a panic traps the service thread; every outstanding request then fails after the host's 30 s deadline.
+- No completions yet. Hover gives the name and the type, not documentation.
+- Inlay hints cover parameter names and the inferred types of variable declarations.
+- On the Web a panic stops the service thread; outstanding requests then fail after the 30 s deadline.
 
 ## License
 
-MIT. Bun's code under `vendor/` (generated) is Bun's, under its MIT license.
+MIT (`LICENSE`). The extension contains Bun's code (MIT) and code ported from typescript-go (Apache-2.0), is built with godot-rust
+(MPL-2.0) and other Rust crates, and ships TypeScript's lib files (Apache-2.0): `THIRD_PARTY_NOTICES.md` has their licenses, and it is
+installed with the addon.

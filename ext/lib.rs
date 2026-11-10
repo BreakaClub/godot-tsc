@@ -8,7 +8,7 @@
 //! and returns an id at once, and `poll` hands over the finished replies, which carry their id; `cancel` takes a request back.
 //! The caller is the engine's main thread, and on the Web the page's: a browser starts a pthread only when the page's thread
 //! returns to its event loop, so a call that waited for the service thread would stall the page for as long as it takes the
-//! thread to start (30 s on a cold page, measured in godot-react-ui's Web demo), and would never be answered if the page waited in
+//! thread to start (30 s on a cold page, measured in a Web export), and would never be answered if the page waited in
 //! the turn that asked for the thread. The calls that remain synchronous are the ones that only move a value under a lock
 //! that is never held while a request runs: `start`, `stop`, `set_file`, `set_files`, `remove_file`, `request_*`, `cancel`,
 //! `poll` and `state`.
@@ -32,7 +32,7 @@ unsafe impl ExtensionLibrary for GodotTscExtension {}
 /// The stack the service thread is given. The parser, the printer and the checker recurse on the depth of the program; the
 /// checker keeps a budget of the stack it has (`set_stack_size`) and reports the files it ran out of room in. On a desktop the memory is
 /// reserved and not committed, so it is generous. In a browser a thread's stack is taken out of the one WebAssembly memory, and all of it
-/// is committed: 8 MB, which is what UCGE's WebAssembly checker has and is enough for the labs.
+/// is committed: 8 MB, which was enough for every project it has checked (up to a few dozen files with React's declarations).
 #[cfg(not(target_os = "emscripten"))]
 const SERVICE_STACK_BYTES: usize = 64 << 20;
 #[cfg(target_os = "emscripten")]

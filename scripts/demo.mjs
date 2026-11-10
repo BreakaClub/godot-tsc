@@ -5,17 +5,18 @@
 //
 // It stages the addon from out/bin (`pnpm build:native` first) and installs it with the package's own installer (`godot-tsc setup`),
 // writes the lib files the checker reads (demo/tsc/libs.json, from the shipped typescript_libs.bin), has the editor write GodotJS's
-// typings for the engine (once; without the extension loaded, since the package declares `GodotTsc` itself), type-checks and bundles
+// typings for the engine (again whenever the engine changes; without the extension loaded, since the package declares `GodotTsc` itself), type-checks and bundles
 // demo/src, and lets the editor import the project. Then it opens the demo, or with `--verify` runs it headless: the demo checks every
 // answer itself (demo/src/main.ts) and this script fails unless it says so. `--capture=<png>` opens it in a window, saves the window's
 // raster once the sample is checked and quits.
 //
-// The demo needs a Godot with GodotJS (V8) and its camel-cased bindings: `GODOT` names the binary (Breaka's Godot 4.8 by default).
+// The demo needs Godot 4.7 or newer with GodotJS (https://github.com/godotjs/GodotJS) on V8: `GODOT` names the binary, or `godot` on PATH is
+// used. It was verified with stock Godot 4.7.2 and upstream GodotJS, and with Breaka's Godot 4.8.
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { libClosure, readLibBundle } from './lib-bundle.mjs';
+import { ES2022_LIB_ROOTS, libClosure, readLibBundle } from '../node/lib-bundle.mjs';
 import { NATIVE_LIBRARIES, OUT_BIN, parseArguments, root } from './godot-api.mjs';
 
 const args = parseArguments(process.argv.slice(2), { flags: ['--verify'], values: ['--capture'] });
@@ -23,14 +24,18 @@ const verify = args.flags.has('--verify');
 const capture = args.values['--capture'];
 if (verify && capture !== undefined) throw new Error('Pass --verify or --capture, not both');
 
-const DEFAULT_GODOT = '/Applications/Godot48.app/Contents/MacOS/Godot';
-const godot = process.env.GODOT ?? DEFAULT_GODOT;
-if (!existsSync(godot)) throw new Error(`No Godot at ${godot}: set GODOT to a Godot with GodotJS (V8)`);
+const godot = process.env.GODOT ?? 'godot';
+const versionRun = spawnSync(godot, ['--version'], { encoding: 'utf8' });
+if (versionRun.error || versionRun.status !== 0) {
+  throw new Error(`No Godot at ${godot}: set GODOT to a Godot 4.7+ with GodotJS (V8), or put one on PATH as "godot"`);
+}
+/** Which engine wrote demo/typings: GodotJS's declarations differ between engines, so another engine writes them again. */
+const engineRecord = `${godot}\n${versionRun.stdout.trim()}\n`;
 
 const demo = join(root, 'demo');
 const addons = join(demo, 'addons');
 const typings = join(demo, 'typings');
-const LIB_ROOTS = ['lib.es2022.d.ts', 'lib.decorators.d.ts', 'lib.decorators.legacy.d.ts'];
+const typingsEngine = join(typings, '.engine');
 const LIB_BUNDLES = [join(root, 'libs/typescript_libs.bin'), join(root, 'vendor/bun/typescript_libs.bin')];
 /** An import or a typings run of a project this size takes seconds; a minute is a hang. */
 const EDITOR_TIMEOUT_MS = 120_000;
@@ -66,7 +71,9 @@ await build({
 // GodotJS's typings for this engine. The editor writes them with whatever extensions it loads, and the package declares `GodotTsc` into
 // the `godot` module itself (src/godot.ts), so they are written with the addon out of the project: two declarations of one class do not
 // merge.
-if (!existsSync(typings)) {
+if (!existsSync(typingsEngine) || readFileSync(typingsEngine, 'utf8') !== engineRecord) {
+  rmSync(typings, { recursive: true, force: true });
+  rmSync(join(demo, 'gen'), { recursive: true, force: true });
   const aside = join(root, '.cache/demo-addons');
   rmSync(aside, { recursive: true, force: true });
   if (existsSync(addons)) {
@@ -81,6 +88,7 @@ if (!existsSync(typings)) {
     if (existsSync(aside)) renameSync(aside, addons);
   }
   if (!existsSync(typings)) throw new Error(`${godot} --generate-types wrote no ${typings}`);
+  writeFileSync(typingsEngine, engineRecord);
 }
 
 // The addon, staged from out/bin and installed by the package's installer.
@@ -93,7 +101,7 @@ run(process.execPath, ['bin/cli.mjs', 'setup', '--project-dir', demo, '--force']
 // The lib files the checker reads: ES2022 and the decorators, and what they reference.
 const bundle = LIB_BUNDLES.find(file => existsSync(file));
 if (!bundle) throw new Error(`No typescript_libs.bin (${LIB_BUNDLES.join(', ')}): run "pnpm vendor" and "pnpm stage:addon"`);
-const libs = libClosure(readLibBundle(bundle), LIB_ROOTS);
+const libs = libClosure(readLibBundle(bundle), ES2022_LIB_ROOTS);
 mkdirSync(join(demo, 'tsc'), { recursive: true });
 writeFileSync(join(demo, 'tsc/libs.json'), JSON.stringify([...libs].map(([name, text]) => ({ name, text }))));
 

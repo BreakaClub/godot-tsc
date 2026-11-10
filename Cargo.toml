@@ -1,7 +1,6 @@
 # godot-tsc: Bun's TypeScript checker and JavaScript compiler as a Godot GDExtension (README.md).
 # `core` is the library, `ext` the GDExtension that loads it into Godot. The vendored crates (`vendor/bun`, written by
-# `scripts/vendor-bun.py`) are a workspace of their own, used as path dependencies, as UCGE's type checker and
-# Luanalysis use their extractions of `bun_sema`.
+# `scripts/vendor-bun.py`) are a workspace of their own, used as path dependencies.
 #
 # Bun's toolchain (`rust-toolchain.toml`): Bun's revision needs a recent nightly (`core::alloc::AllocatorClone`).
 [workspace]

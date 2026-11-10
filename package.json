@@ -1,8 +1,24 @@
 {
   "name": "godot-tsc",
   "version": "7.0.0",
-  "description": "Bun's TypeScript checker and JavaScript compiler as a Godot GDExtension, with a typed GodotJS host",
+  "description": "Bun's TypeScript type checker and transpiler inside Godot: a GDExtension with a typed, non-blocking API for GodotJS",
+  "keywords": [
+    "godot",
+    "godot-engine",
+    "gdextension",
+    "godotjs",
+    "typescript",
+    "type-checker",
+    "transpiler",
+    "bun",
+    "live-coding"
+  ],
   "license": "MIT",
+  "homepage": "https://github.com/BreakaClub/godot-tsc#readme",
+  "bugs": {
+    "url": "https://github.com/BreakaClub/godot-tsc/issues"
+  },
+  "author": "Breaka Club",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/BreakaClub/godot-tsc.git"
@@ -17,6 +33,9 @@
     "*": {
       "host": [
         "./dist/host.d.ts"
+      ],
+      "lib-bundle": [
+        "./node/lib-bundle.d.mts"
       ]
     }
   },
@@ -31,6 +50,10 @@
       "import": "./dist/host.mjs",
       "require": "./dist/host.js"
     },
+    "./lib-bundle": {
+      "types": "./node/lib-bundle.d.mts",
+      "import": "./node/lib-bundle.mjs"
+    },
     "./package.json": "./package.json",
     "./typescript_libs.bin": "./libs/typescript_libs.bin"
   },
@@ -39,10 +62,15 @@
     "addon",
     "libs",
     "bin",
+    "node",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "packageManager": "pnpm@11.5.2",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "postinstall": "node ./bin/cli.mjs --postinstall",
     "setup": "node ./bin/cli.mjs setup",
@@ -56,7 +84,8 @@
     "test": "tsx --test tests/*.test.ts",
     "test:rust": "node scripts/test-rust.mjs",
     "demo": "node scripts/demo.mjs",
-    "demo:verify": "node scripts/demo.mjs --verify"
+    "demo:verify": "node scripts/demo.mjs --verify",
+    "notices": "node scripts/notices.mjs"
   },
   "devDependencies": {
     "@types/node": "24.3.3",

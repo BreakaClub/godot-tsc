@@ -1,4 +1,10 @@
-// Reads Bun's bundle of TypeScript's lib files (`typescript_libs.bin`, which this package ships as `godot-tsc/typescript_libs.bin`).
+// godot-tsc/lib-bundle (Node 24 or newer): reads Bun's bundle of TypeScript's lib files, which this package ships as
+// `godot-tsc/typescript_libs.bin`, so a build step can write the lib files a project's checker reads. Not for GodotJS: it uses node:fs and
+// node:zlib.
+//
+//   import { createRequire } from 'node:module';
+//   import { libClosure, readLibBundle } from 'godot-tsc/lib-bundle';
+//   const libs = libClosure(readLibBundle(createRequire(import.meta.url).resolve('godot-tsc/typescript_libs.bin')), ['lib.es2022.d.ts']);
 //
 // The bundle is a `u32` count, that many 52-byte records (name length, a 39-byte name, the frame's start and length, its dictionary),
 // then the files, each a zstd frame of its own (Bun's `src/runtime/cli/typescript_libs.rs`). Two of the files are the others'
@@ -12,6 +18,9 @@ const RECORD_LENGTH = 1 + NAME_LENGTH + U32 + U32 + U32;
 /** The files that are the others' dictionaries; a record's dictionary is 1 or 2, or 0 for none. */
 const DICTIONARIES = ['lib.es5.d.ts', 'lib.dom.d.ts'];
 const NODE_WITH_ZSTD_DICTIONARIES = 24;
+
+/** The lib files `libClosure` starts from for a project whose `lib` is ES2022 and that uses decorators. */
+export const ES2022_LIB_ROOTS = Object.freeze(['lib.es2022.d.ts', 'lib.decorators.d.ts', 'lib.decorators.legacy.d.ts']);
 
 /** Every file of the bundle at `file`: its name (`lib.es2022.d.ts`) to its text. */
 export function readLibBundle(file) {

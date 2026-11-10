@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Installs the packaged addon (addon/godot-tsc/) into a Godot project at res://addons/godot-tsc/. It runs as the package's postinstall, and as
-// `godot-tsc setup`. The shape and the guards are godot-react-ui's installer's, so a project using both behaves the same way.
+// `godot-tsc setup`.
 
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

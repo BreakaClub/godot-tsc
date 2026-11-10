@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { before, test } from 'node:test';
@@ -10,6 +10,8 @@ import { before, test } from 'node:test';
 
 const root = resolve(__dirname, '..');
 const HOST_VALUES = ['REQUEST_DEADLINE_MS', 'RequestCancelled', 'RequestScope', 'Tsc', 'TscProject', 'parseTranspileResult', 'transpileResultOf', 'parseReply'];
+
+const LIB_BUNDLE = [join(root, 'libs/typescript_libs.bin'), join(root, 'vendor/bun/typescript_libs.bin')].find(file => existsSync(file));
 
 let consumer = '';
 
@@ -21,6 +23,12 @@ before(() => {
   mkdirSync(installed, { recursive: true });
   cpSync(join(root, 'package.json'), join(installed, 'package.json'));
   cpSync(join(root, 'dist'), join(installed, 'dist'), { recursive: true });
+  cpSync(join(root, 'node'), join(installed, 'node'), { recursive: true });
+  // The lib bundle the package ships (libs/, staged from vendor/bun), or vendor/bun's where nothing is staged yet (CI's native job).
+  if (LIB_BUNDLE !== undefined) {
+    mkdirSync(join(installed, 'libs'));
+    cpSync(LIB_BUNDLE, join(installed, 'libs', 'typescript_libs.bin'));
+  }
   writeFileSync(join(consumer, 'package.json'), '{ "name": "consumer", "private": true }\n');
 });
 
@@ -102,3 +110,15 @@ export { parsed, same, open, wrong };
     assert.equal(result.status, 0, result.stdout + result.stderr);
   });
 }
+
+test('godot-tsc/lib-bundle reads the shipped lib files, and the ES2022 closure is what a check of ES2022 code needs', { skip: LIB_BUNDLE === undefined ? 'no typescript_libs.bin: "pnpm vendor" extracts it' : false }, () => {
+  const result = node(`
+    import { createRequire } from 'node:module';
+    import { ES2022_LIB_ROOTS, libClosure, readLibBundle } from 'godot-tsc/lib-bundle';
+    const all = readLibBundle(createRequire(import.meta.url).resolve('godot-tsc/typescript_libs.bin'));
+    const needed = libClosure(all, ES2022_LIB_ROOTS);
+    console.log(JSON.stringify({ all: all.size, needed: needed.size, es5: needed.get('lib.es5.d.ts')?.includes('interface Array<T>') }));
+  `, 'module');
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { all: 108, needed: 57, es5: true });
+});

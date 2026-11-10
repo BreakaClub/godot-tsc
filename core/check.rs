@@ -2,9 +2,6 @@
 //! no file system, no thread pool and no `bun_sema_driver`. The host gives it every file it may read (the project's
 //! configuration, its sources, the packages' declarations and the lib files); a check returns a report as JSON, with
 //! positions in UTF-16 code units as TypeScript's API gives them.
-//!
-//! From UCGE's `packages/type-checker/crate/lib.rs` (the same host, with the describe module and the wasm exports left
-//! out).
 
 use bun_sema::atom::Interner;
 use bun_sema::check::explain::MessageChain;
@@ -289,7 +286,7 @@ fn sort_and_deduplicate(diagnostics: &mut Vec<Diagnostic>) {
     });
 }
 
-/// One diagnostic in the shape of breaka-rpg's `TypeScriptRuntimeDiagnostic`: `pos` and `end` in UTF-16 code units,
+/// One diagnostic as JSON (`CheckDiagnostic` in src/protocol.ts): `pos` and `end` in UTF-16 code units,
 /// positions with lines and characters from 0, the message with its chain as TypeScript prints it (each level of the
 /// chain on its own line, indented by two spaces a level).
 fn write_diagnostic(out: &mut String, at: Option<(&[u8], &Positions, u32, u32)>, code: u32, kind: Category, text: &[u8]) {

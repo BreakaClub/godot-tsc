@@ -1,11 +1,8 @@
 import { Callable, CodeEdit, Color, Control, Engine, FileAccess, GError, HSplitContainer, ItemList, Label, MarginContainer, OS, RenderingServer, TabContainer, VBoxContainer } from 'godot';
-import { createClassBinder } from 'godot.annotations';
 import {
   CATEGORY_ERROR, RequestCancelled, RequestScope, openTsc,
   type CheckDiagnostic, type CheckOutcome, type InlayHint, type ProjectFile, type TranspileResult, type Tsc, type TscProject,
 } from 'godot-tsc';
-
-const bind = createClassBinder();
 
 /** Where the demo's lib files are (written by `scripts/demo.mjs` from the package's `typescript_libs.bin`). */
 const LIBS_RESOURCE = 'res://tsc/libs.json';
@@ -124,7 +121,6 @@ function describeValue(value: unknown): string {
  * transpiles to, what that exports when it runs, and the inferred types), with the type under the caret below. Every answer comes from the extension's service
  * thread a frame or more later; nothing here waits for it.
  */
-@bind()
 export default class Main extends Control {
   private tsc: Tsc | null = null;
   private project: TscProject | null = null;
