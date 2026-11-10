@@ -107,7 +107,8 @@ lines.push(
   readFileSync(join(root, 'licenses/MPL-2.0.txt'), 'utf8').trim(),
   '```',
 );
-const notices = `${lines.join('\n').trimEnd()}\n`;
+// Some license files have CRLF line ends; the file is written with LF, as git stores it, so the check agrees on every checkout.
+const notices = `${lines.join('\n').replace(/\r\n?/gu, '\n').trimEnd()}\n`;
 
 if (args.flags.has('--check')) {
   const committed = existsSync(OUTPUT) ? readFileSync(OUTPUT, 'utf8') : '';
