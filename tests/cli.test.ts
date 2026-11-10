@@ -99,9 +99,12 @@ test('setup installs the addon, writes .version, a .gitignore and node_modules/.
     }
     assert.ok(!ignored('project.godot'), 'the project itself is not');
 
+    // An install that is up to date but has no .gitignore (made before the installer wrote one) gets it.
+    rmSync(join(addon, '.gitignore'));
     const second = spawnSync('node', [cli, 'setup', '--project-dir', project], { encoding: 'utf8' });
     assert.equal(second.status, 0);
     assert.match(second.stdout, /Addon is already up to date/u);
+    assert.ok(existsSync(join(addon, '.gitignore')));
 
     writeFileSync(join(addon, 'bin', 'left-over.wasm'), 'from an older version');
     const forced = spawnSync('node', [cli, 'setup', '--project-dir', project, '--force'], { encoding: 'utf8' });

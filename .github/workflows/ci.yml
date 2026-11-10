@@ -75,3 +75,97 @@ jobs:
 
       - name: Tests, with the compiler
         run: pnpm test
+
+      # Each run's builds, for trying a commit without building it: kept two weeks.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-macos
+          path: |
+            out/bin/libgodot_tsc.dylib
+            target/release/godot-tsc-cli
+          if-no-files-found: error
+          retention-days: 14
+
+  web:
+    name: Web side module (stock profile)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.11
+
+      - name: Rust toolchain (rust-toolchain.toml) with the Emscripten target and the standard library's sources
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add wasm32-unknown-emscripten
+          rustup component add rust-src
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Vendor Bun's crates
+        run: node scripts/vendor.mjs
+
+      - name: Build
+        run: node scripts/build-web.mjs --profile=stock
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-web-stock
+          path: out/bin/godot_tsc.web.stock.wasm
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: Package (npm tarball and addon zip)
+    needs: [native, web]
+    # macOS, for `lipo`: the staged manifest lists the architectures the macOS library has (scripts/stage-addon.mjs).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 11.5.2
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The lib bundle the package ships comes from Bun's crates.
+      - name: Vendor Bun's crates
+        run: pnpm vendor
+
+      - name: Build TypeScript
+        run: pnpm build
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: out/bin/
+          merge-multiple: true
+
+      - name: Stage, zip and pack
+        run: |
+          rm -f out/bin/godot-tsc-cli
+          mkdir -p package
+          node scripts/stage-addon.mjs --require-binaries --web-profile=stock
+          (cd addon && zip -r ../package/godot-tsc-addon.zip godot-tsc/)
+          pnpm pack --pack-destination package
+          ls -lah package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: godot-tsc-package
+          path: package/
+          if-no-files-found: error
+          retention-days: 14

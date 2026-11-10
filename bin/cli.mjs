@@ -32,6 +32,14 @@ function ensureGdignore(godotRoot) {
   return true;
 }
 
+/**
+ * npm owns the addon: the project's git leaves it out, as it does node_modules, and an install puts it back. Written by the installer, not
+ * shipped, as npm leaves `.gitignore` files out of packages.
+ */
+function writeGitignore(addonDir) {
+  writeFileSync(join(addonDir, '.gitignore'), '# Installed by the godot-tsc npm package (npx godot-tsc setup); not committed.\n*\n', 'utf8');
+}
+
 function printHelp() {
   console.log(`
 ${ADDON_NAME} v${pkg.version} CLI
@@ -96,6 +104,8 @@ function run() {
   const targetAddonDir = join(godotRoot, 'addons', ADDON_NAME);
   const stampFile = join(targetAddonDir, '.version');
   if (existsSync(stampFile) && readFileSync(stampFile, 'utf8').trim() === pkg.version && !args.includes('--force')) {
+    // An install made before the installer wrote it gets it now.
+    writeGitignore(targetAddonDir);
     if (!isPostinstall) console.log(`[${ADDON_NAME}] Addon is already up to date (v${pkg.version}) at res://addons/${ADDON_NAME}/`);
     return;
   }
@@ -106,9 +116,7 @@ function run() {
   mkdirSync(targetAddonDir, { recursive: true });
   cpSync(SOURCE_ADDON_DIR, targetAddonDir, { recursive: true, force: true });
   writeFileSync(stampFile, pkg.version, 'utf8');
-  // npm owns the addon: the project's git leaves it out, as it does node_modules, and an install puts it back. Written here, not shipped, as
-  // npm leaves `.gitignore` files out of packages.
-  writeFileSync(join(targetAddonDir, '.gitignore'), '# Installed by the godot-tsc npm package (npx godot-tsc setup); not committed.\n*\n', 'utf8');
+  writeGitignore(targetAddonDir);
   const createdGdignore = ensureGdignore(godotRoot);
 
   console.log(`✓ [${ADDON_NAME}] Installed GDExtension v${pkg.version} to res://addons/${ADDON_NAME}/`);
