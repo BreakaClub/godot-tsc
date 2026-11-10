@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: mymindstorm/setup-emsdk@v16
+      - uses: emscripten-core/setup-emsdk@v16
         with:
           version: 4.0.11
 
