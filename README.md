@@ -237,7 +237,7 @@ pnpm pack
 
 Pushing a tag `v<version>` that matches `package.json` runs `.github/workflows/release.yml`, which builds the macOS and stock Web
 binaries, packs the package and attaches it to a GitHub release. Run by hand, the same workflow is a dry run: it makes everything a release
-would publish, uploads it as the run's `godot-tsc-release` artifact and runs `npm publish --dry-run`, and publishes nothing.
+would publish, uploads it as the run's `godot-tsc-release` artifact and runs `pnpm publish --dry-run` on the tarball, and publishes nothing.
 
 ```bash
 gh workflow run release.yml --ref main

@@ -3,8 +3,8 @@ name: Release
 # A tag `v<version>` (matching package.json) builds the binaries, stages the addon, packs the npm tarball and attaches both to a GitHub release.
 #
 # Run by hand (Actions > Release > Run workflow, or `gh workflow run release.yml --ref <branch>`), it is a dry run: it makes everything a
-# release would publish and stops there. The tarball and the addon zip are the run's `godot-tsc-release` artifact, and `npm publish
-# --dry-run` lists what npm would get. Only a pushed tag publishes, whatever ref a run by hand names.
+# release would publish and stops there. The tarball and the addon zip are the run's `godot-tsc-release` artifact (`pnpm pack` lists the
+# tarball's files), and `pnpm publish --dry-run` takes that tarball as far as publishing it. Only a pushed tag publishes, whatever ref a run by hand names.
 # Platforms: macOS arm64 natively and the Web side module for stock Godot 4.7 templates (Emscripten 4.0.11), the ones that have been run.
 on:
   push:
@@ -126,9 +126,9 @@ jobs:
       - name: Pack
         run: pnpm pack --pack-destination release && ls -lah release
 
-      # What npm would get, published or not: the files, their sizes and the version. It needs no npm credentials.
-      - name: npm publish --dry-run
-        run: npm publish --dry-run --ignore-scripts release/godot-tsc-*.tgz
+      # The tarball as far as publishing it, published or not. It needs no npm credentials.
+      - name: pnpm publish --dry-run
+        run: pnpm publish --dry-run --no-git-checks release/godot-tsc-*.tgz
 
       # What a release publishes, for a dry run to download and try.
       - uses: actions/upload-artifact@v4
