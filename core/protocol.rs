@@ -26,6 +26,10 @@ pub enum Request {
     /// response is `{"ok":true,"messages":[...]}`: what the server sends back, the response to a request among them.
     Lsp {
         message: serde_json::Value,
+        /// Which of the service's language servers the message is for: each session names its own project in `initialize`, so one
+        /// service serves several projects at once. The default is `""`.
+        #[serde(default)]
+        session: String,
     },
 }
 

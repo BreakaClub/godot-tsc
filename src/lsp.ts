@@ -123,20 +123,28 @@ export function pathOfUri(uri: string): string {
   return decodeURIComponent(uri.slice('file://'.length));
 }
 
+/** The sessions made by this realm, for their names: each has a server of its own in the service. */
+let sessionsMade = 0;
+
 /**
- * A session with the service's language server, for one project. `initialize` names the project; then the other calls ask what an editor
- * asks. The documents are the host's files: `open` and `change` set a file's text as `setFile` does, through the server.
+ * A session with a language server of the service, for one project. `initialize` names the project; then the other calls ask what an editor
+ * asks. Each session has a server of its own, so sessions for several projects share one `Tsc` (one service thread, one set of files) and
+ * none of them initializes twice. The documents are the host's files: `open` and `change` set a file's text as `setFile` does.
  */
 export class LspSession {
   private readonly host: TscHost;
   private readonly project: ProjectOptions;
   private readonly inlayParameterNames: InlayParameterNames;
+  /** Which of the service's servers this session's messages go to. */
+  readonly session: string;
   private nextId = 1;
 
   constructor(host: TscHost, project: ProjectOptions, options: { readonly inlayParameterNames?: InlayParameterNames } = {}) {
     this.host = host;
     this.project = project;
     this.inlayParameterNames = options.inlayParameterNames ?? 'literals';
+    sessionsMade += 1;
+    this.session = `session-${sessionsMade}`;
   }
 
   /** Starts the session. Resolves with the server's capabilities. */
@@ -156,7 +164,7 @@ export class LspSession {
   /** `request`, with the time the service thread took over it. */
   async requestTimed<T>(method: string, params: unknown, scope?: RequestScope): Promise<{ readonly result: T; readonly serviceMs: number }> {
     const id = this.nextId++;
-    const reply = await this.host.lsp({ jsonrpc: '2.0', id, method, params }, scope);
+    const reply = await this.host.lsp({ jsonrpc: '2.0', id, method, params }, scope, this.session);
     const response = reply.messages.find(message => message.id === id && message.method === undefined);
     if (response === undefined) throw new Error(`The language server did not answer ${method}`);
     if (response.error !== undefined) throw new LspError(response.error.code, response.error.message);
@@ -166,7 +174,7 @@ export class LspSession {
 
   /** Sends a notification. */
   async notify(method: string, params: unknown, scope?: RequestScope): Promise<void> {
-    await this.host.lsp({ jsonrpc: '2.0', method, params }, scope);
+    await this.host.lsp({ jsonrpc: '2.0', method, params }, scope, this.session);
   }
 
   /** Opens the file at `path` with `text` (which becomes the file's text). */

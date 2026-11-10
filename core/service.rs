@@ -10,7 +10,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 pub struct Service {
     host: MemoryHost,
     runs: Runs,
-    lsp: crate::lsp::Lsp,
+    /// The language servers, by session.
+    lsp: std::collections::HashMap<String, crate::lsp::Lsp>,
 }
 
 /// A response that is a failure with one message and no position.
@@ -75,8 +76,13 @@ impl Service {
                 self.host.remove(path.as_bytes());
                 to_json(&Response::Done(Done { ok: true }))
             }
-            Request::Lsp { message } => {
-                let messages = self.lsp.handle(&mut self.host, &mut self.runs, &message);
+            Request::Lsp { message, session } => {
+                let is_exit = message.get("method").and_then(serde_json::Value::as_str) == Some("exit");
+                let messages = self.lsp.entry(session.clone()).or_default().handle(&mut self.host, &mut self.runs, &message);
+                // `exit` ends the session: its server is forgotten.
+                if is_exit {
+                    self.lsp.remove(&session);
+                }
                 serde_json::json!({ "ok": true, "messages": messages }).to_string()
             }
         }

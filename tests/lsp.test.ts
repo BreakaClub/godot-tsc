@@ -388,3 +388,39 @@ test('diagnostics: a file\'s, and every source\'s, with the clean ones listed em
   assert.deepEqual(all.items.map(item => [item.uri, item.items.length]).sort(), [[A_URI, 0], [B_URI, 1]]);
   assert.ok(all.filesLoaded > 2);
 });
+
+test('one service serves several projects, a server per session, and exit ends a session', { skip: SKIP }, async () => {
+  const other = 'export const other = 1;\nexport const twice = other * 2;\n';
+  const files = [
+    ...await libFiles(), { path: '/project/tsconfig.json', text: CONFIG }, { path: '/project/a.ts', text: A }, { path: '/project/b.ts', text: B },
+    { path: '/other/tsconfig.json', text: JSON.stringify({ compilerOptions: { lib: ['es2022'], strict: true }, files: ['/other/x.ts'] }) },
+    { path: '/other/x.ts', text: other },
+  ];
+  const initialize = (config: string) => ({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { capabilities: {}, initializationOptions: { config, libDir: '/lib' } } });
+  const definition = (uri: string, position: Position) => ({ jsonrpc: '2.0', id: 1, method: 'textDocument/definition', params: { textDocument: { uri }, position } });
+  const frames = [
+    { op: 'setFiles', files },
+    { op: 'lsp', session: 'one', message: initialize('/project/tsconfig.json') },
+    { op: 'lsp', session: 'two', message: definition('file:///other/x.ts', at(other, 'other * 2')) },
+    { op: 'lsp', session: 'two', message: initialize('/other/tsconfig.json') },
+    { op: 'lsp', session: 'two', message: definition('file:///other/x.ts', at(other, 'other * 2')) },
+    { op: 'lsp', session: 'one', message: definition(B_URI, at(B, 'distance(origin')) },
+    { op: 'lsp', session: 'two', message: { jsonrpc: '2.0', method: 'exit' } },
+    { op: 'lsp', session: 'two', message: definition('file:///other/x.ts', at(other, 'other * 2')) },
+  ];
+  const reply = spawnSync(CLI, [], { input: Buffer.concat(frames.map(frame)), maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(reply.status, 0, reply.stderr.toString());
+  const answers: Message[][] = [];
+  for (let offset = 0; offset < reply.stdout.length;) {
+    const length = reply.stdout.readUInt32LE(offset);
+    const parsed = JSON.parse(reply.stdout.subarray(offset + FRAME_HEADER_BYTES, offset + FRAME_HEADER_BYTES + length).toString('utf8'));
+    answers.push(parsed.messages ?? []);
+    offset += FRAME_HEADER_BYTES + length;
+  }
+  const [, , beforeInitialize, , inTwo, inOne, , afterExit] = answers;
+  // Session two is a server of its own: not initialized by session one's initialize, and gone after its exit.
+  assert.equal(beforeInitialize?.[0]?.error?.code, -32002);
+  assert.deepEqual(result<Location[]>(inTwo ?? []).map(l => [l.uri, l.range.start]), [['file:///other/x.ts', at(other, 'other = 1')]]);
+  assert.deepEqual(shown(result<Location[]>(inOne ?? [])), ['a:5:distance']);
+  assert.equal(afterExit?.[0]?.error?.code, -32002);
+});

@@ -282,9 +282,13 @@ test('an LSP session sends each message as an lsp query, picks its response by i
     service.answer(request.id, JSON.stringify({ id: request.id, kind: 'query', ms: 1, result: { ok: true, messages } }));
   };
   const lspOf = (index: number): Record<string, unknown> => JSON.parse(service.requests[index]?.detail ?? '{}').message;
+  const sessionOf = (index: number): unknown => JSON.parse(service.requests[index]?.detail ?? '{}').session;
+  // Each session has a server of its own in the service.
+  assert.notEqual(new LspSession(host, { config: '/q/tsconfig.json', libDir: '/libs' }).session, session.session);
 
   const initialized = session.initialize();
   assert.deepEqual(lspOf(0).params, { processId: null, rootUri: null, capabilities: {}, initializationOptions: { config: '/p/tsconfig.json', libDir: '/libs', inlayParameterNames: 'literals' } });
+  assert.equal(sessionOf(0), session.session);
   answer(0, [{ jsonrpc: '2.0', id: lspOf(0).id, result: { capabilities: { definitionProvider: true } } }]);
   // `initialized` follows `initialize`'s answer, as a notification.
   while (service.requests.length === 0) await pause(1);

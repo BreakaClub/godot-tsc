@@ -61,7 +61,7 @@ impl GodotTsc {
     fn ask(&mut self, kind: Kind, request: Request) -> i64 {
         let id = self.next_id();
         let supersedes = match &request {
-            Request::Lsp { message } => godot_tsc_core::supersede_key(message)
+            Request::Lsp { message, session } => godot_tsc_core::supersede_key(session, message)
                 .map(|key| Supersedes { key, superseded: godot_tsc_core::superseded_response(message) }),
             _ => None,
         };

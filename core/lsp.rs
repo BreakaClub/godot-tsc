@@ -11,6 +11,9 @@
 //! `initialized`, `exit`, `textDocument/didOpen`, `didChange` (full or incremental) and `didClose` (the file stays in the project: it is
 //! closed in the editor, not deleted).
 //!
+//! The service holds a server per session (`{"op":"lsp","session":"...","message":...}`), so one service serves several projects, each
+//! session naming its own in `initialize`. `exit` ends a session.
+//!
 //! Diagnostics are pulled (`textDocument/diagnostic`, `workspace/diagnostic`): a check of the whole project, whose report is the
 //! file's or every source's. The extension drops a diagnostics request that has not begun when a newer one for the same document comes,
 //! and answers it with `ServerCancelled` (`ext/queue.rs`).
@@ -462,16 +465,18 @@ fn set_text(host: &mut MemoryHost, runs: &mut Runs, path: &str, text: Vec<u8>) {
 /// LSP's `ServerCancelled`: the server cancelled the request, and the client asks again when it wants to.
 const SERVER_CANCELLED: i64 = -32802;
 
-/// What a queue of requests may drop a message for: a diagnostics request is replaced by a newer one for the same document (or for the
-/// workspace) that comes before it has begun. Two messages with the same key are the same question asked again.
-pub fn supersede_key(message: &Value) -> Option<String> {
+/// What a queue of requests may drop a message for: a diagnostics request is replaced by a newer one of the same session for the same
+/// document (or for the workspace) that comes before it has begun. Two messages with the same key are the same question asked again.
+pub fn supersede_key(session: &str, message: &Value) -> Option<String> {
     let method = message.get("method").and_then(Value::as_str)?;
     message.get("id")?;
-    match method {
-        "workspace/diagnostic" => Some(method.to_string()),
-        "textDocument/diagnostic" => Some(format!("{method} {}", message.pointer("/params/textDocument/uri")?.as_str()?)),
-        _ => None,
-    }
+    let question = match method {
+        "workspace/diagnostic" => method.to_string(),
+        "textDocument/diagnostic" => format!("{method} {}", message.pointer("/params/textDocument/uri")?.as_str()?),
+        _ => return None,
+    };
+    // A session's name may hold anything; its length keeps it from running into the question.
+    Some(format!("{}:{session} {question}", session.len()))
 }
 
 /// The response (as the service's `{"ok":true,"messages":[...]}`) to a message dropped for a newer one with its key: `ServerCancelled`.
@@ -482,4 +487,24 @@ pub fn superseded_response(message: &Value) -> String {
         "error": { "code": SERVER_CANCELLED, "message": "a newer request for the same diagnostics took this one's place", "data": { "retriggerRequest": false } },
     });
     json!({ "ok": true, "messages": [cancelled] }).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_diagnostics_request_is_superseded_by_the_same_question_of_the_same_session_only() {
+        let workspace = |id: u64| json!({ "jsonrpc": "2.0", "id": id, "method": "workspace/diagnostic", "params": {} });
+        let document = |id: u64, uri: &str| json!({ "jsonrpc": "2.0", "id": id, "method": "textDocument/diagnostic", "params": { "textDocument": { "uri": uri } } });
+        assert_eq!(supersede_key("a", &workspace(1)), supersede_key("a", &workspace(2)));
+        assert_ne!(supersede_key("a", &workspace(1)), supersede_key("b", &workspace(1)));
+        assert_eq!(supersede_key("a", &document(1, "file:///x.ts")), supersede_key("a", &document(2, "file:///x.ts")));
+        assert_ne!(supersede_key("a", &document(1, "file:///x.ts")), supersede_key("a", &document(1, "file:///y.ts")));
+        // A session whose name ends like another's question is still another session.
+        assert_ne!(supersede_key("a workspace/diagnostic", &workspace(1)), supersede_key("a", &workspace(1)));
+        // Nothing else is superseded, nor is a notification.
+        assert_eq!(supersede_key("a", &json!({ "jsonrpc": "2.0", "id": 1, "method": "textDocument/hover", "params": {} })), None);
+        assert_eq!(supersede_key("a", &json!({ "jsonrpc": "2.0", "method": "workspace/diagnostic", "params": {} })), None);
+    }
 }

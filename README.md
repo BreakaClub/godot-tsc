@@ -17,6 +17,14 @@ scripting and modding tools, and anything else that needs TypeScript's answers w
 > **Status: 7.0.0, pre-release.** It is not on npm yet, and the only prebuilt binaries are for macOS (Apple silicon) and the Web; other
 > desktop platforms build from source (below) but are untested.
 
+## Contents
+
+- [Requirements](#requirements) and [Install](#install)
+- [Use](#use): transpiling, the [language server](#language-server), [lib files](#lib-files), [use under Node](#under-node), [typings](#typings)
+- [Demo](#demo), [Platforms](#platforms), [Versions](#versions)
+- [Build from source](#build-from-source), [Tests](#tests), [Layout](#layout)
+- [Limits](#limits), [License](#license), [AI disclosure](#ai-disclosure)
+
 ## Requirements
 
 - Godot 4.7.2 or newer, with [GodotJS](https://github.com/godotjs/GodotJS) (tested on its V8 runtime).
@@ -101,15 +109,19 @@ tsc.close();
 ### Language server
 
 `LspSession` names the project in `initialize` (`initializationOptions: { config, libDir, inlayParameterNames }`) and gives each request an
-id and a typed result; a refusal fails with `LspError`. `tsc.lsp(message)` relays any one JSON-RPC message instead, so a host can connect
-an editor of its own (over a socket, say).
+id and a typed result; a refusal fails with `LspError`. `tsc.lsp(message, scope, session)` relays any one JSON-RPC message instead, so a
+host can connect an editor of its own (over a socket, say).
+
+The service holds a language server per session. Each `LspSession` is a session of its own, so several projects (an editor with a
+tsconfig per tab, say) share one `Tsc` (one service thread and one set of files, parsed once) without initializing anything twice. A
+raw `tsc.lsp` message goes to the session it names, `""` by default; `exit` ends a session.
 
 | Request | `LspSession` | |
 | --- | --- | --- |
 | `textDocument/diagnostic`, `workspace/diagnostic` | `diagnostics(path)`, `workspaceDiagnostics()` | A check of the project: one file's diagnostics, or every source's (the clean ones listed empty). A request that a newer one for the same document replaced before it began fails with `SERVER_CANCELLED`, so typing does not queue checks. |
 | `textDocument/completion` | `completion(path, position)` | After `expression.`, the properties of its type, with their types; elsewhere what is in scope: the project's names, then the lib files', then keywords (types only where a type is written). Nothing in a comment or a string. Each item replaces the name being typed. |
 | `textDocument/signatureHelp` | `signatureHelp(path, position)` | The signatures of the call the position is in the arguments of, the one the arguments resolve to active, and the parameter it is at (a rest parameter takes the rest). |
-| `textDocument/hover` | `hover(path, position)` | The name and its type, as markdown. |
+| `textDocument/hover` | `hover(path, position)` | The name and its type, as one TypeScript code block (`name: type`, or the type alone where there is no name), and the name's `range`. |
 | `textDocument/inlayHint` | `inlayHints(path, range)` | The inferred types of declarations that write none, and the parameter names of arguments (`inlayParameterNames`: `'literals'` by default, `'all'` or `'none'`). |
 | `textDocument/definition`, `typeDefinition` | `definition`, `typeDefinition` | The declarations' names. An import goes to what it imports. |
 | `textDocument/references`, `documentHighlight` | `references`, `documentHighlight` | Every name that refers to the same symbol, in the project or in the file, in text order. A highlight is `3` (declares) or `2` (reads). |
@@ -226,8 +238,8 @@ binaries, packs the package and attaches it to a GitHub release.
 
 | Command | What it covers |
 | --- | --- |
-| `pnpm test` | The host's request flow (ids, polling, cancelling, the deadline, superseded checks, projects, LSP sessions) against a stand-in link; the transpiler and the language server through `godot-tsc-cli`; the installer; and the built package as a consumer resolves it, under Node and TypeScript's module resolutions. |
-| `pnpm test:rust` | The extension's request queue, and the checker's symbol and position helpers. |
+| `pnpm test` | The host's request flow (ids, polling, cancelling, the deadline, LSP sessions and superseded diagnostics) against a stand-in link; the transpiler and the language server (every request, several sessions in one service) through `godot-tsc-cli`; the installer; and the built package as a consumer resolves it, under Node and TypeScript's module resolutions. |
+| `pnpm test:rust` | The extension's request queue (keyed superseding included), superseding keys, and the helpers for positions, symbols, signatures and code-or-comment. |
 | `pnpm test:types` | The package's TypeScript. |
 | `pnpm demo:verify` | The extension in Godot: transpile, run, diagnostics (an error found, then fixed), hover, inlay hints, references, go to definition, rename, completion, signature help and a typed syntax error, through the demo's UI. |
 | `pnpm vendor --verify` | `vendor/bun` is Bun's code at the pinned revision plus the reviewed patches. |
@@ -272,3 +284,12 @@ tests/     the TypeScript tests
 MIT (`LICENSE`). The extension contains Bun's code (MIT) and code ported from typescript-go (Apache-2.0), is built with godot-rust
 (MPL-2.0) and other Rust crates, and ships TypeScript's lib files (Apache-2.0): `THIRD_PARTY_NOTICES.md` has their licenses, and it is
 installed with the addon.
+
+## AI disclosure
+
+This project makes extensive use of LLM-generated code. If that's a problem for you or your employer, do not use this project.
+
+Realistically, this project is far from novel: it is a wrapper around Bun's library.
+
+Bun's TypeScript library is itself an LLM-driven Rust port of Microsoft's Go codebase. It passes Microsoft's extensive TypeScript test
+suite, and has far superior performance to the original codebase. Make of that what you will.
