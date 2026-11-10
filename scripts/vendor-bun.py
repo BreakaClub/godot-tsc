@@ -29,7 +29,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REVISION = "408c9374b266b45fe6b8260e09be73aa82a957cd"
 PACKAGE = Path(__file__).resolve().parent.parent
@@ -197,14 +197,14 @@ def library_manifest(text):
 
 
 def normalise(path):
-    """A relative path without its `.` and `..` components."""
+    """A path in Bun's tree (always `/`-separated, whatever the host) without its `.` and `..` components."""
     parts = []
     for part in path.parts:
         if part == "..":
             parts.pop()
         elif part != ".":
             parts.append(part)
-    return Path(*parts)
+    return PurePosixPath(*parts)
 
 
 def excluded(path):
@@ -235,7 +235,7 @@ def main():
 
     def manifest_of(package_path):
         if package_path in REPLACED_CRATES:
-            return (STUBS / package_path / "Cargo.toml").read_text()
+            return (STUBS / package_path / "Cargo.toml").read_text(encoding="utf-8")
         manifest_path = f"{package_path}/Cargo.toml"
         return library_manifest(adapted.get(manifest_path, git(source, "show", f"{REVISION}:{manifest_path}")).decode())
 
@@ -260,7 +260,7 @@ def main():
                         visit_path(inherited[key]["path"])
                 elif "path" in dependency:
                     # A path dependency that is no workspace dependency (bun_js_parser's bun_react_compiler).
-                    visit_path(str(normalise(Path(package_path) / dependency["path"])))
+                    visit_path(str(normalise(PurePosixPath(package_path) / dependency["path"])))
 
     for name in ROOTS:
         visit_path(inherited[name]["path"])
@@ -307,7 +307,7 @@ def main():
             raise SystemExit(f"{package_path} is replaced but no crate of the closure depends on it")
         stub_root = STUBS / package_path
         for stub in sorted(p for p in stub_root.rglob("*") if p.is_file()):
-            output(f"{package_path}/{stub.relative_to(stub_root)}", stub.read_bytes())
+            output(f"{package_path}/{stub.relative_to(stub_root).as_posix()}", stub.read_bytes())
         for kept in REPLACED_CRATES[package_path]["keep"]:
             if f"{package_path}/{kept}" not in written:
                 raise SystemExit(f"{package_path}/{kept} is kept from Bun but upstream has no such file")
@@ -351,7 +351,7 @@ pub const ENABLE_TINYCC: bool = false;
 '''
     output("build/debug/codegen/build_options.rs", build_options.encode())
     if args.verify:
-        stale = [p for p in DESTINATION.rglob("*") if p.is_file() and str(p.relative_to(DESTINATION)) not in hashes
+        stale = [p for p in DESTINATION.rglob("*") if p.is_file() and p.relative_to(DESTINATION).as_posix() not in hashes
                  and p.name != "provenance.json"]
         if stale:
             raise SystemExit(f"files in vendor/bun that are not the extraction: {[str(p) for p in stale[:10]]}")
