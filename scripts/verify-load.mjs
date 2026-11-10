@@ -16,6 +16,11 @@ const project = join(root, 'tests/stock');
 const MANIFEST = 'res://addons/godot-tsc/godot_tsc.gdextension';
 /** The project's own deadline is 20 s (tests/stock/main.gd). */
 const RUN_TIMEOUT_MS = 60_000;
+/**
+ * Under Rosetta the engine is translated before it starts, and it prints nothing until that is done: 26 s on a GitHub runner in one run,
+ * more than RUN_TIMEOUT_MS in another.
+ */
+const TRANSLATED_RUN_TIMEOUT_MS = 300_000;
 const VERIFIED = 'godot-tsc loaded:';
 const arch = args.values['--arch'];
 
@@ -38,7 +43,7 @@ cpSync(join(root, 'addon/godot-tsc'), join(project, 'addons/godot-tsc'), { recur
 // crashes on the way out (in DocTools::generate, with any extension).
 mkdirSync(join(project, '.godot'), { recursive: true });
 writeFileSync(join(project, '.godot/extension_list.cfg'), `${MANIFEST}\n`);
-const run = engine(['--script', 'res://main.gd'], RUN_TIMEOUT_MS);
+const run = engine(['--script', 'res://main.gd'], arch === undefined ? RUN_TIMEOUT_MS : TRANSLATED_RUN_TIMEOUT_MS);
 const verified = run.stdout.split('\n').find(line => line.includes(VERIFIED));
 if (run.status !== 0 || !verified) {
   console.error(`The extension did not load and compile in ${godot} (exit ${run.status ?? run.signal})`);
