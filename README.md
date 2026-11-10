@@ -221,7 +221,7 @@ own. 7.0.0 is the first release.
 ## Build from source
 
 You need rustup (the nightly in `rust-toolchain.toml` installs itself), Node 24 (`.node-version`; avoid 24.7.0, which can crash at
-exit), pnpm, Python 3 and git. The Web build also needs the `wasm32-unknown-emscripten` target and `rust-src` for that nightly, and an
+exit), pnpm, Python 3.11 or newer and git. The Web build also needs the `wasm32-unknown-emscripten` target and `rust-src` for that nightly, and an
 Emscripten SDK in `EMSDK`.
 
 ```bash

@@ -56,6 +56,11 @@ jobs:
         with:
           version: 4.0.11
 
+      # scripts/vendor-bun.py reads Cargo manifests with tomllib, which Python has from 3.11; the image's is 3.10.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Rust toolchain (rust-toolchain.toml) with the Emscripten target and the standard library's sources
         run: |
           rustup show active-toolchain || rustup toolchain install
