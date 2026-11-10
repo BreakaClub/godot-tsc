@@ -61,20 +61,20 @@ test('godot-tsc/host loads under Node through import, and a request cancelled th
   assert.equal(result.stdout.trim(), 'true');
 });
 
-test('the godot-tsc entry needs the godot module, and shares the host module rather than copying it', () => {
+test('the godot-tsc entry needs GodotJS\'s godot.lib.api module, and shares the host module rather than copying it', () => {
   const result = node(`try { require('godot-tsc'); } catch (error) { console.log(error.code, error.message.split('\\n')[0]); }`, 'commonjs');
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /MODULE_NOT_FOUND Cannot find module 'godot'/u);
+  assert.match(result.stdout, /MODULE_NOT_FOUND Cannot find module 'godot\.lib\.api'/u);
   // With a stand-in for the engine's module, both entries give the same classes.
-  mkdirSync(join(consumer, 'node_modules', 'godot'), { recursive: true });
-  writeFileSync(join(consumer, 'node_modules', 'godot', 'index.js'), 'module.exports = {};\n');
+  mkdirSync(join(consumer, 'node_modules', 'godot.lib.api'), { recursive: true });
+  writeFileSync(join(consumer, 'node_modules', 'godot.lib.api', 'index.js'), 'module.exports = {};\n');
   try {
     const shared = node(`const main = require('godot-tsc'); const host = require('godot-tsc/host');
       console.log(main.Tsc === host.Tsc && main.RequestCancelled === host.RequestCancelled && typeof main.openTsc);`, 'commonjs');
     assert.equal(shared.status, 0, shared.stderr);
     assert.equal(shared.stdout.trim(), 'function'); // false when either class differs
   } finally {
-    rmSync(join(consumer, 'node_modules', 'godot'), { recursive: true, force: true });
+    rmSync(join(consumer, 'node_modules', 'godot.lib.api'), { recursive: true, force: true });
   }
 });
 
@@ -86,15 +86,9 @@ for (const [moduleResolution, module] of [['node', 'commonjs'], ['node16', 'node
     mkdirSync(project, { recursive: true });
     writeFileSync(join(project, 'tsconfig.json'), JSON.stringify({
       compilerOptions: { module, moduleResolution, target: 'es2022', strict: true, noEmit: true, skipLibCheck: true, types: [] },
-      files: ['probe.ts', 'godot.d.ts'],
+      // No engine typings: the package's declarations name no engine module, so they resolve without a GodotJS project's.
+      files: ['probe.ts'],
     }));
-    // The main entry's declarations name the engine's module: a stand-in for what a GodotJS project's typings declare.
-    writeFileSync(join(project, 'godot.d.ts'), `declare module 'godot' {
-  export class RefCounted {}
-  export class PackedStringArray { constructor(items?: string[]); }
-  export const ClassDB: { classExists(name: string): boolean };
-}
-`);
     writeFileSync(join(project, 'probe.ts'), `import { RequestScope, Tsc, parseTranspileResult, type TranspileResult } from 'godot-tsc/host';
 import { openTsc, Tsc as MainTsc } from 'godot-tsc';
 const scope: RequestScope = new RequestScope();

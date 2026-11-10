@@ -85,6 +85,7 @@
     "test:rust": "node scripts/test-rust.mjs",
     "demo": "node scripts/demo.mjs",
     "demo:verify": "node scripts/demo.mjs --verify",
+    "verify:bindings": "node scripts/verify-bindings.mjs",
     "notices": "node scripts/notices.mjs"
   },
   "devDependencies": {

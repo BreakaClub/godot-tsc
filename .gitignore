@@ -10,3 +10,8 @@ release/
 node_modules/
 *.tgz
 .DS_Store
+# What scripts/verify-bindings.mjs writes into its project.
+tests/bindings/.godot/
+tests/bindings/addons/
+tests/bindings/tsc/
+tests/bindings/project.godot

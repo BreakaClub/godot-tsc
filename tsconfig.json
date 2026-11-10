@@ -19,5 +19,8 @@
     "src",
     "tests",
     "typings/godot.d.ts"
+  ],
+  "exclude": [
+    "tests/bindings"
   ]
 }

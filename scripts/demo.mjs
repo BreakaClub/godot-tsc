@@ -5,7 +5,7 @@
 //
 // It stages the addon from out/bin (`pnpm build:native` first) and installs it with the package's own installer (`godot-tsc setup`),
 // writes the lib files the checker reads (demo/tsc/libs.json, from the shipped typescript_libs.bin), has the editor write GodotJS's
-// typings for the engine (again whenever the engine changes; without the extension loaded, since the package declares `GodotTsc` itself), type-checks and bundles
+// typings for the engine (again whenever the engine changes), type-checks and bundles
 // demo/src, and lets the editor import the project. Then it opens the demo, or with `--verify` runs it headless: the demo checks every
 // answer itself (demo/src/main.ts) and this script fails unless it says so. `--capture=<png>` opens it in a window, saves the window's
 // raster once the sample is checked and quits.
@@ -14,7 +14,7 @@
 // used. It was verified with stock Godot 4.7.2 and upstream GodotJS, and with Breaka's Godot 4.8.
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ES2022_LIB_ROOTS, libClosure, readLibBundle } from '../node/lib-bundle.mjs';
 import { NATIVE_LIBRARIES, OUT_BIN, parseArguments, root } from './godot-api.mjs';
@@ -68,25 +68,11 @@ await build({
   alias: { 'godot-tsc': join(root, 'src/index.ts') },
 });
 
-// GodotJS's typings for this engine. The editor writes them with whatever extensions it loads, and the package declares `GodotTsc` into
-// the `godot` module itself (src/godot.ts), so they are written with the addon out of the project: two declarations of one class do not
-// merge.
+// GodotJS's typings for this engine.
 if (!existsSync(typingsEngine) || readFileSync(typingsEngine, 'utf8') !== engineRecord) {
   rmSync(typings, { recursive: true, force: true });
   rmSync(join(demo, 'gen'), { recursive: true, force: true });
-  const aside = join(root, '.cache/demo-addons');
-  rmSync(aside, { recursive: true, force: true });
-  if (existsSync(addons)) {
-    mkdirSync(join(root, '.cache'), { recursive: true });
-    renameSync(addons, aside);
-  }
-  // The editor's list of extensions would load it from where it was.
-  rmSync(join(demo, '.godot/extension_list.cfg'), { force: true });
-  try {
-    editor(['--generate-types']);
-  } finally {
-    if (existsSync(aside)) renameSync(aside, addons);
-  }
+  editor(['--generate-types']);
   if (!existsSync(typings)) throw new Error(`${godot} --generate-types wrote no ${typings}`);
   writeFileSync(typingsEngine, engineRecord);
 }

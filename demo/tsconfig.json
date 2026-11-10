@@ -11,5 +11,5 @@
     "types": [],
     "paths": { "godot-tsc": ["../src/index.ts"] }
   },
-  "include": ["src", "typings/godot*.d.ts", "../typings/timers.d.ts"]
+  "include": ["src", "typings/godot*.d.ts", "typings/jsb.runtime.bundle.d.ts", "../typings/timers.d.ts"]
 }
