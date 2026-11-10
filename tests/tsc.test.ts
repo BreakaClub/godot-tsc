@@ -312,3 +312,20 @@ test('an LSP session sends each message as an lsp query, picks its response by i
   assert.equal(pathOfUri(fileUri('/p/a b#c.ts')), '/p/a b#c.ts');
   host.close();
 });
+
+test('an LSP message is in the service queue when the call returns, behind what was asked before it, in the same turn', async () => {
+  const service = new FakeService();
+  const host = new Tsc(service);
+  const session = new LspSession(host, { config: '/p/tsconfig.json', libDir: '/libs' });
+  const pending = [
+    host.transpile('/p/a.ts', 'A'),
+    session.request('workspace/diagnostic', {}),
+    session.notify('textDocument/didChange', {}),
+    host.lsp({ jsonrpc: '2.0', id: 9, method: 'textDocument/hover', params: {} }),
+  ];
+  // No await between the calls and this: an editor counts on a check being queued right behind its edit's compile.
+  assert.deepEqual(service.requests.map(request => request.kind === 'query' ? JSON.parse(request.detail).message.method : request.kind),
+    ['compile', 'workspace/diagnostic', 'textDocument/didChange', 'textDocument/hover']);
+  host.close();
+  await Promise.allSettled(pending);
+});

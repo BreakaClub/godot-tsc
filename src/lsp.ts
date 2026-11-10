@@ -156,7 +156,7 @@ export class LspSession {
     return result.capabilities;
   }
 
-  /** Sends a request and resolves with its result, or fails with `LspError`. */
+  /** Sends a request and resolves with its result, or fails with `LspError`. The request is in the service's queue when the call returns. */
   async request<T>(method: string, params: unknown, scope?: RequestScope): Promise<T> {
     return (await this.requestTimed<T>(method, params, scope)).result;
   }

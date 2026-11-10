@@ -94,7 +94,8 @@ export interface TscHost {
    * One Language Server Protocol message for the service's language server (a request or a notification), and the messages it sends back:
    * the response to a request among them. `LspSession` (`lsp.ts`) speaks it with ids and typed results. A diagnostics request that has not
    * begun when a newer one for the same document is sent is answered with `ServerCancelled`. `session` picks one of the service's servers:
-   * each names its own project in `initialize`, so one service serves several projects (`""` by default).
+   * each names its own project in `initialize`, so one service serves several projects (`""` by default). The message is in the service's
+   * queue when the call returns, as every request is: requests run in the order they are made.
    */
   lsp(message: LspMessage, scope?: RequestScope, session?: string): Promise<LspReply>;
   /** Ends the service. Every request still outstanding fails with `RequestCancelled`. */
