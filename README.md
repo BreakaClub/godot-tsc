@@ -243,7 +243,7 @@ would publish, uploads it as the run's `godot-tsc-release` artifact and runs `pn
 gh workflow run release.yml --ref main
 ```
 
-Every CI run also uploads its builds, kept 14 days: the extension and `godot-tsc-cli` (`native-macos`), the stock Web module
+Every CI run also uploads its builds, kept 14 days: the extension (`native-macos`), `godot-tsc-cli` (`godot-tsc-cli-macos`), the stock Web module
 (`native-web-stock`), and the npm tarball with the addon zip (`godot-tsc-package`).
 
 ## Tests

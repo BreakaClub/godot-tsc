@@ -77,12 +77,18 @@ jobs:
         run: pnpm test
 
       # Each run's builds, for trying a commit without building it: kept two weeks.
+      # One file per artifact: a file is stored at the artifact's root, which the package job downloads into out/bin.
       - uses: actions/upload-artifact@v4
         with:
           name: native-macos
-          path: |
-            out/bin/libgodot_tsc.dylib
-            target/release/godot-tsc-cli
+          path: out/bin/libgodot_tsc.dylib
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: godot-tsc-cli-macos
+          path: target/release/godot-tsc-cli
           if-no-files-found: error
           retention-days: 14
 
@@ -161,7 +167,6 @@ jobs:
 
       - name: Stage, zip and pack
         run: |
-          rm -f out/bin/godot-tsc-cli
           mkdir -p package
           node scripts/stage-addon.mjs --require-binaries --web-profile=stock
           (cd addon && zip -r ../package/godot-tsc-addon.zip godot-tsc/)
